@@ -29,7 +29,6 @@ public:
     bool SaveBytecodeToFile(const std::string& outputPath);
 
 private:
-    // Attempts to locate a known VMProtect section name
     bool FindVMProtectSection(std::string& sectionName);
     bool IsRWX(const IMAGE_SECTION_HEADER* section);
     bool IsLikelyVMBytecode(BYTE* data, DWORD size);

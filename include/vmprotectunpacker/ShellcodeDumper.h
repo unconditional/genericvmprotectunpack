@@ -9,7 +9,6 @@ class ShellcodeDumper {
 public:
     ShellcodeDumper(const std::string& binaryPath);
 
-    // Scans the binary for shellcode-like regions
     bool ScanForShellcode();
 
     // Dumps detected shellcode to a file

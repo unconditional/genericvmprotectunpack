@@ -65,9 +65,7 @@ int main(int argc, char* argv[]) {
     }
 
     Logger::Log("[+] Bytecode extracted. Devirtualizing...", LogLevel::INFO);
-    for (const auto& region : bytecodeRegions) {
-        Devirtualizer::Devirtualize(&parser, &region);
-    }
+    Devirtualizer::Devirtualize(&parser, bytecodeRegions.data(), bytecodeRegions.size());
 
     Logger::Log("[+] Devirtualization complete. Fixing imports...", LogLevel::INFO);
     ImportFixer::Fix(parser);
@@ -78,6 +76,25 @@ int main(int argc, char* argv[]) {
 
     std::string output = "unpacked_";
     output += std::string(strrchr(exePath, '\\') ? strrchr(exePath, '\\') + 1 : exePath);
+
+    {
+        PIMAGE_NT_HEADERS nt = parser.GetNtHeaders();
+        if (nt) {
+            ULONGLONG runtimeBase = nt->OptionalHeader.ImageBase;
+            if (runtimeBase >= 0x7FF000000000ULL) {
+                nt->OptionalHeader.ImageBase = 0x140000000ULL;
+                Logger::Log(Utils::Format("[+] ImageBase restored: 0x%llx -> 0x140000000", runtimeBase), LogLevel::INFO);
+            }
+
+            PIMAGE_SECTION_HEADER sec = IMAGE_FIRST_SECTION(nt);
+            for (int i = 0; i < nt->FileHeader.NumberOfSections; ++i, ++sec) {
+                if (sec->Misc.VirtualSize != 0) {
+                    sec->PointerToRawData = sec->VirtualAddress;
+                    sec->SizeOfRawData    = sec->Misc.VirtualSize;
+                }
+            }
+        }
+    }
 
     if (!parser.Save(output.c_str())) {
         Logger::Log("[-] Failed to save unpacked file.", LogLevel::Error);

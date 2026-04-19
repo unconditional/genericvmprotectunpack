@@ -1,5 +1,6 @@
 #include <Windows.h>
 #include <winternl.h>
+#include <TlHelp32.h>
 #include <vector>
 #include <fstream>
 #include <sstream>
@@ -8,173 +9,167 @@
 #include "vmprotectunpacker/Utils.h"
 #include <capstone/capstone.h>
 #include <iomanip>
-#include <sstream>
 
+static bool TextSectionPopulated(HANDLE hProcess, LPVOID imageBase, DWORD textRVA, size_t checkBytes = 256) {
+    std::vector<BYTE> buf(checkBytes, 0);
+    SIZE_T r = 0;
+    if (!ReadProcessMemory(hProcess, (BYTE*)imageBase + textRVA, buf.data(), checkBytes, &r) || r == 0)
+        return false;
+    for (size_t i = 0; i < r; ++i)
+        if (buf[i] != 0) return true;
+    return false;
+}
+
+static void SuspendAllThreads(DWORD pid) {
+    HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, pid);
+    if (hSnap == INVALID_HANDLE_VALUE) return;
+    THREADENTRY32 te = { sizeof(te) };
+    if (Thread32First(hSnap, &te)) {
+        do {
+            if (te.th32OwnerProcessID == pid) {
+                HANDLE hT = OpenThread(THREAD_SUSPEND_RESUME, FALSE, te.th32ThreadID);
+                if (hT) { SuspendThread(hT); CloseHandle(hT); }
+            }
+        } while (Thread32Next(hSnap, &te));
+    }
+    CloseHandle(hSnap);
+}
 
 bool VMPDebugger::Run(const std::string& exePath) {
     STARTUPINFOA si = { sizeof(si) };
     PROCESS_INFORMATION pi = {};
 
-    Logger::Log("[*] Launching malware in suspended mode...");
+    Logger::Log("[*] Launching target suspended (no debug attach)...");
     if (!CreateProcessA(exePath.c_str(), NULL, NULL, NULL, FALSE,
-        DEBUG_ONLY_THIS_PROCESS | CREATE_SUSPENDED, NULL, NULL, &si, &pi)) {
-        Logger::Log("[-] Failed to launch malware", LogLevel::Error);
+        CREATE_SUSPENDED, NULL, NULL, &si, &pi)) {
+        Logger::Log("[-] Failed to launch target", LogLevel::Error);
         return false;
     }
 
-    Logger::Log("[+] Malware launched in suspended mode");
-
-    using pNtQueryInformationProcess = NTSTATUS(WINAPI*)(
-        HANDLE, PROCESSINFOCLASS, PVOID, ULONG, PULONG);
-    auto NtQueryInformationProcess = (pNtQueryInformationProcess)GetProcAddress(
+    using pNtQIP = NTSTATUS(WINAPI*)(HANDLE, PROCESSINFOCLASS, PVOID, ULONG, PULONG);
+    auto NtQueryInformationProcess = (pNtQIP)GetProcAddress(
         GetModuleHandleA("ntdll.dll"), "NtQueryInformationProcess");
-    if (!NtQueryInformationProcess) {
-        Logger::Log("[-] Failed to resolve NtQueryInformationProcess", LogLevel::Error);
-        return false;
-    }
 
     PROCESS_BASIC_INFORMATION pbi = {};
-    NTSTATUS status = NtQueryInformationProcess(pi.hProcess, ProcessBasicInformation, &pbi, sizeof(pbi), NULL);
-    if (status != 0) {
-        Logger::Log("[-] NtQueryInformationProcess failed", LogLevel::Error);
-        return false;
-    }
+    NtQueryInformationProcess(pi.hProcess, ProcessBasicInformation, &pbi, sizeof(pbi), NULL);
 
     PVOID imageBase = nullptr;
-    if (!ReadProcessMemory(pi.hProcess, (BYTE*)pbi.PebBaseAddress + 0x10, &imageBase, sizeof(PVOID), nullptr)) {
-        Logger::Log("[-] Failed to read ImageBaseAddress from PEB", LogLevel::Error);
-        return false;
-    }
+    ReadProcessMemory(pi.hProcess, (BYTE*)pbi.PebBaseAddress + 0x10, &imageBase, sizeof(PVOID), nullptr);
 
     BYTE headers[0x1000] = {};
-    if (!ReadProcessMemory(pi.hProcess, imageBase, headers, sizeof(headers), nullptr)) {
-        Logger::Log("[-] Failed to read PE headers", LogLevel::Error);
-        return false;
-    }
+    ReadProcessMemory(pi.hProcess, imageBase, headers, sizeof(headers), nullptr);
 
     auto* dos = (IMAGE_DOS_HEADER*)headers;
-    auto* nt = (IMAGE_NT_HEADERS64*)((BYTE*)headers + dos->e_lfanew);
-    DWORD oepRVA = nt->OptionalHeader.AddressOfEntryPoint;
-    LPVOID oepVA = (BYTE*)imageBase + oepRVA;
-    SIZE_T imageSize = nt->OptionalHeader.SizeOfImage;
+    auto* nt  = (IMAGE_NT_HEADERS64*)((BYTE*)headers + dos->e_lfanew);
+    SIZE_T  imgSize = nt->OptionalHeader.SizeOfImage;
+    DWORD   oepRVA  = nt->OptionalHeader.AddressOfEntryPoint;
+    LPVOID  oepVA   = (BYTE*)imageBase + oepRVA;
 
-    Logger::Log("[+] OEP: 0x" + ToHex((uintptr_t)oepVA));
-
-    BYTE originalByte = 0;
-    SIZE_T read, written;
-    ReadProcessMemory(pi.hProcess, oepVA, &originalByte, 1, &read);
-    BYTE int3 = 0xCC;
-    WriteProcessMemory(pi.hProcess, oepVA, &int3, 1, &written);
-    FlushInstructionCache(pi.hProcess, oepVA, 1);
-    Logger::Log("[+] INT3 set at OEP");
-
-    ResumeThread(pi.hThread);
-
-    DEBUG_EVENT debugEvent = {};
-    while (WaitForDebugEvent(&debugEvent, INFINITE)) {
-        if (debugEvent.dwDebugEventCode == EXCEPTION_DEBUG_EVENT) {
-            const auto& ex = debugEvent.u.Exception.ExceptionRecord;
-
-            if (ex.ExceptionCode == EXCEPTION_BREAKPOINT && (LPVOID)ex.ExceptionAddress == oepVA) {
-                Logger::Log("[+] OEP Breakpoint hit!");
-
-                WriteProcessMemory(pi.hProcess, oepVA, &originalByte, 1, &written);
-                FlushInstructionCache(pi.hProcess, oepVA, 1);
-
-                // === Read PE headers again to locate section ===
-                if (!ReadProcessMemory(pi.hProcess, imageBase, headers, sizeof(headers), nullptr)) {
-                    Logger::Log("[-] Failed to re-read PE headers", LogLevel::Error);
-                    break;
-                }
-
-                dos = (IMAGE_DOS_HEADER*)headers;
-                nt = (IMAGE_NT_HEADERS64*)((BYTE*)headers + dos->e_lfanew);
-                IMAGE_SECTION_HEADER* sections = IMAGE_FIRST_SECTION(nt);
-                DWORD oepOffset = (DWORD)((uintptr_t)oepVA - (uintptr_t)imageBase);
-                SIZE_T sectionSize = 0;
-
-                for (int i = 0; i < nt->FileHeader.NumberOfSections; ++i) {
-                    DWORD start = sections[i].VirtualAddress;
-                    DWORD end = start + sections[i].Misc.VirtualSize;
-                    if (oepOffset >= start && oepOffset < end) {
-                        sectionSize = sections[i].Misc.VirtualSize;
-                        Logger::Log("[+] OEP is in section: " + std::string((char*)sections[i].Name, 8) +
-                            " | RVA: 0x" + ToHex(start) +
-                            " | Size: 0x" + ToHex(sectionSize));
-                        break;
-                    }
-                }
-
-                if (sectionSize == 0) {
-                    Logger::Log("[-] Failed to locate section containing OEP", LogLevel::Error);
-                    break;
-                }
-
-                SuspendThread(pi.hThread);
-
-                Logger::Log("[*] Disassembling OEP region...");
-                processHandle = pi.hProcess; // Ensure it's set before disassembling
-                if (!Disassemble(oepVA, 0x1000)) {
-                    Logger::Log("[-] Disassembly failed.", LogLevel::Error);
-                }
-
-                Logger::Log("[*] Dumping process memory...");
-                if (!DumpProcessImage(pi.hProcess, imageBase, imageSize, "unpacked_dump.bin")) {
-                    Logger::Log("[-] Dump failed.", LogLevel::Error);
-                }
-                else {
-                    Logger::Log("[+] Process unpacked and dumped.");
-                }
-                break;
-            }
-        }
-        ContinueDebugEvent(debugEvent.dwProcessId, debugEvent.dwThreadId, DBG_CONTINUE);
+    // Find .text section RVA
+    IMAGE_SECTION_HEADER* secs = IMAGE_FIRST_SECTION(nt);
+    DWORD textRVA = 0x1000;
+    for (int i = 0; i < nt->FileHeader.NumberOfSections; ++i) {
+        char name[9] = {};
+        memcpy(name, secs[i].Name, 8);
+        if (strcmp(name, ".text") == 0) { textRVA = secs[i].VirtualAddress; break; }
     }
 
+    Logger::Log("[+] ImageBase: 0x" + ToHex((uintptr_t)imageBase));
+    Logger::Log("[+] OEP RVA:   0x" + ToHex((uintptr_t)oepRVA));
+    Logger::Log("[+] .text RVA: 0x" + ToHex((uintptr_t)textRVA));
+
+    ResumeThread(pi.hThread);
+    Logger::Log("[+] Process resumed — polling .text for VMP stub writes (max 30s)...");
+
+    bool dumpDone = false;
+    const int MAX_POLLS = 3000; // 30 seconds
+
+    for (int poll = 0; poll < MAX_POLLS; ++poll) {
+        Sleep(10);
+
+        DWORD exitCode = STILL_ACTIVE;
+        GetExitCodeProcess(pi.hProcess, &exitCode);
+        bool dead = (exitCode != STILL_ACTIVE);
+
+        if (TextSectionPopulated(pi.hProcess, imageBase, textRVA, 256)) {
+            Logger::Log("[+] .text populated after ~" + std::to_string(poll * 10) + "ms");
+
+            if (!dead) {
+                Sleep(50);
+                SuspendAllThreads(pi.dwProcessId);
+            }
+
+            BYTE hdrBuf[0x1000] = {};
+            SIZE_T hr = 0;
+            ReadProcessMemory(pi.hProcess, imageBase, hdrBuf, sizeof(hdrBuf), &hr);
+            SIZE_T finalSize = imgSize;
+            if (hr > 0x40) {
+                auto* dos2 = (IMAGE_DOS_HEADER*)hdrBuf;
+                if (dos2->e_magic == IMAGE_DOS_SIGNATURE) {
+                    auto* nt2 = (IMAGE_NT_HEADERS64*)(hdrBuf + dos2->e_lfanew);
+                    if (nt2->OptionalHeader.SizeOfImage > 0)
+                        finalSize = nt2->OptionalHeader.SizeOfImage;
+                }
+            }
+
+            dumpDone = DumpProcessImage(pi.hProcess, imageBase, finalSize, "unpacked_dump.bin");
+            if (!dead) TerminateProcess(pi.hProcess, 0);
+            break;
+        }
+
+        if (dead) {
+            Logger::Log("[!] Process exited (0x" + ToHex((uintptr_t)exitCode) +
+                        ") before .text was populated — VMP killed itself pre-initialization.");
+            // Last-chance dump even if .text is zero
+            dumpDone = DumpProcessImage(pi.hProcess, imageBase, imgSize, "unpacked_dump.bin");
+            break;
+        }
+    }
+
+    if (!dumpDone && !TextSectionPopulated(pi.hProcess, imageBase, textRVA, 32))
+        Logger::Log("[-] Poll timed out or .text never populated.", LogLevel::Error);
+
+    // Disassemble OEP from live/terminated process for diagnostics
     processHandle = pi.hProcess;
-    threadHandle = pi.hThread;
+    Disassemble(oepVA, 0x40);
 
-    return true;
+    processHandle = pi.hProcess;
+    threadHandle  = pi.hThread;
+
+    return dumpDone;
 }
-
-
 
 
 bool VMPDebugger::DumpProcessImage(HANDLE hProcess, LPVOID baseAddress, SIZE_T imageSize, const std::string& dumpPath) {
     std::vector<BYTE> buffer(imageSize);
     SIZE_T bytesRead = 0;
 
-    if (!ReadProcessMemory(hProcess, baseAddress, buffer.data(), imageSize, &bytesRead) || bytesRead != imageSize) {
-        Logger::Log("[-] Failed to read memory from process for dump.", LogLevel::Error);
+    if (!ReadProcessMemory(hProcess, baseAddress, buffer.data(), imageSize, &bytesRead) || bytesRead == 0) {
+        Logger::Log("[-] ReadProcessMemory failed.", LogLevel::Error);
         return false;
     }
+    if (bytesRead < imageSize) {
+        Logger::Log("[*] Partial read: " + std::to_string(bytesRead) + "/" + std::to_string(imageSize) + " bytes");
+        buffer.resize(bytesRead);
+    }
 
-    // === Dump to file ===
     std::ofstream outFile(dumpPath, std::ios::binary);
     if (!outFile) {
-        Logger::Log("[-] Failed to open dump file for writing.", LogLevel::Error);
+        Logger::Log("[-] Failed to open dump file: " + dumpPath, LogLevel::Error);
         return false;
     }
 
     outFile.write(reinterpret_cast<const char*>(buffer.data()), buffer.size());
     outFile.close();
-
-    Logger::Log("[+] Memory dumped to: " + dumpPath);
-
-    // === Dump to console in hex ===
-    Logger::Log("[*] Memory (hex dump of first 512 bytes):");
+    Logger::Log("[+] Dumped " + std::to_string(buffer.size()) + " bytes to: " + dumpPath);
 
     std::ostringstream oss;
-    size_t maxBytes = std::min<size_t>(512, buffer.size());
-
-    for (size_t i = 0; i < maxBytes; ++i) {
-        if (i % 16 == 0) {
-            oss << "\n0x" << std::hex << std::setw(8) << std::setfill('0') << i << ": ";
-        }
+    size_t preview = std::min<size_t>(128, buffer.size());
+    for (size_t i = 0; i < preview; ++i) {
+        if (i % 16 == 0) oss << "\n" << std::hex << std::setw(8) << std::setfill('0') << i << ": ";
         oss << std::hex << std::setw(2) << std::setfill('0') << (int)buffer[i] << " ";
     }
-
-    Logger::Log(oss.str());
+    Logger::Log("[*] Dump hex preview:" + oss.str());
     return true;
 }
 
@@ -189,28 +184,23 @@ bool VMPDebugger::Disassemble(LPVOID address, size_t size) {
 
     csh handle;
     cs_insn* insn;
-    size_t count;
 
     if (cs_open(CS_ARCH_X86, CS_MODE_64, &handle) != CS_ERR_OK) {
-        Logger::Log("[-] Capstone failed to initialize", LogLevel::Error);
+        Logger::Log("[-] Capstone init failed", LogLevel::Error);
         return false;
     }
 
-    count = cs_disasm(handle, buffer.data(), bytesRead, (uint64_t)address, 0, &insn);
+    size_t count = cs_disasm(handle, buffer.data(), bytesRead, (uint64_t)address, 0, &insn);
     if (count > 0) {
-        Logger::Log("[+] Disassembly at OEP:");
-        for (size_t i = 0; i < count; i++) {
+        Logger::Log("[+] OEP disassembly:");
+        for (size_t i = 0; i < count && i < 16; i++) {
             std::ostringstream oss;
-            oss << "0x" << std::hex << insn[i].address << ": "
+            oss << "  0x" << std::hex << insn[i].address << ": "
                 << insn[i].mnemonic << " " << insn[i].op_str;
             Logger::Log(oss.str());
         }
         cs_free(insn, count);
     }
-    else {
-        Logger::Log("[-] Failed to disassemble code", LogLevel::Error);
-    }
-
     cs_close(&handle);
-    return true;
+    return count > 0;
 }

@@ -11,7 +11,7 @@ public:
 
     bool AnalyzeHandlers();
     bool DevirtualizeToFile(const std::string& outPath);
-    static bool Devirtualize(PEParser* parser,const BYTE* region);
+    static bool Devirtualize(PEParser* parser, const BYTE* region, size_t regionSize);
     
 
 private:

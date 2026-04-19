@@ -7,7 +7,7 @@
 PEParser::PEParser() : filePath(""), hFile(NULL), hMapping(NULL), mappedImage(nullptr), imageSize(0) {}
 
 PEParser::~PEParser() {
-    if (mappedImage) UnmapViewOfFile(mappedImage);
+    if (mappedImage) delete[] mappedImage;
     if (hMapping) CloseHandle(hMapping);
     if (hFile) CloseHandle(hFile);
 }
@@ -185,9 +185,9 @@ PIMAGE_SECTION_HEADER PEParser::GetSectionHeader(const std::string& name) {
      return std::string(name);
  }
  bool PEParser::ReplaceImage(BYTE* newData, size_t newSize) {
-     
+
      if (mappedImage) {
-         UnmapViewOfFile(mappedImage);
+         delete[] mappedImage;
          mappedImage = nullptr;
      }
 
@@ -208,7 +208,6 @@ PIMAGE_SECTION_HEADER PEParser::GetSectionHeader(const std::string& name) {
      memcpy(mappedImage, newData, newSize);
      imageSize = newSize;
 
-     // Mark these as null since there's no file/mapping now
      hFile = nullptr;
      hMapping = nullptr;
 
@@ -225,7 +224,8 @@ PIMAGE_SECTION_HEADER PEParser::GetSectionHeader(const std::string& name) {
 
          if (rva >= sectionStart && rva < sectionEnd) {
              DWORD offset = rva - section->VirtualAddress;
-             return mappedImage + section->PointerToRawData + offset;
+             DWORD base = section->PointerToRawData ? section->PointerToRawData : section->VirtualAddress;
+             return mappedImage + base + offset;
          }
      }
 
@@ -315,11 +315,11 @@ PIMAGE_SECTION_HEADER PEParser::GetSectionHeader(const std::string& name) {
      }
 
      
-     DWORD signature = 0;
+     WORD signature = 0;
      DWORD bytesRead = 0;
-     BOOL readOk = ReadFile(hFile, &signature, sizeof(DWORD), &bytesRead, NULL);
+     BOOL readOk = ReadFile(hFile, &signature, sizeof(WORD), &bytesRead, NULL);
 
-     if (!readOk || signature != 0x5A4D) {
+     if (!readOk || signature != IMAGE_DOS_SIGNATURE) {
          Logger::Log("[-] File is not a valid PE (missing MZ header): " + filepath, LogLevel::Error);
          CloseHandle(hFile);
          return false;
@@ -329,24 +329,27 @@ PIMAGE_SECTION_HEADER PEParser::GetSectionHeader(const std::string& name) {
      SetFilePointer(hFile, 0, NULL, FILE_BEGIN);
 
     
-     hMapping = CreateFileMappingA(hFile, NULL, PAGE_READONLY, 0, 0, NULL);
-     if (!hMapping) {
-         Logger::Log("[-] Failed to create file mapping.", LogLevel::Error);
-         CloseHandle(hFile);
-         return false;
-     }
-
-     
-     mappedImage = (BYTE*)MapViewOfFile(hMapping, FILE_MAP_READ, 0, 0, 0);
-     if (!mappedImage) {
-         Logger::Log("[-] Failed to map view of file.", LogLevel::Error);
-         CloseHandle(hMapping);
-         CloseHandle(hFile);
-         return false;
-     }
-
-    
      imageSize = GetFileSize(hFile, NULL);
+     if (imageSize == INVALID_FILE_SIZE || imageSize == 0) {
+         Logger::Log("[-] Failed to get file size.", LogLevel::Error);
+         CloseHandle(hFile);
+         return false;
+     }
+
+     // Read into a heap buffer so callers can modify headers in-place.
+     mappedImage = new BYTE[imageSize];
+     DWORD bytesRead2 = 0;
+     SetFilePointer(hFile, 0, NULL, FILE_BEGIN);
+     if (!ReadFile(hFile, mappedImage, (DWORD)imageSize, &bytesRead2, NULL) || bytesRead2 != imageSize) {
+         Logger::Log("[-] Failed to read file into buffer.", LogLevel::Error);
+         delete[] mappedImage;
+         mappedImage = nullptr;
+         CloseHandle(hFile);
+         return false;
+     }
+
+     CloseHandle(hFile);
+     hFile = NULL;
      Logger::Log("[+] Successfully loaded PE file: " + filepath, LogLevel::INFO);
 
      return true;

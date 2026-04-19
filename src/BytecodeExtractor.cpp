@@ -12,27 +12,40 @@ BytecodeExtractor::BytecodeExtractor(PEParser* parser)
 bool BytecodeExtractor::ExtractVMBytecode() {
     auto sections = parser->GetAllSectionHeaders();
     BYTE* base = parser->GetMappedImage();
+    DWORD oepRva = parser->GetOEP();
 
+    if (oepRva != 0) {
+        for (auto& sec : sections) {
+            bool isExec = (sec.Characteristics & IMAGE_SCN_MEM_EXECUTE) != 0;
+            if (!isExec) continue;
+
+            DWORD secEnd = sec.VirtualAddress + max(sec.Misc.VirtualSize, sec.SizeOfRawData);
+            if (oepRva >= sec.VirtualAddress && oepRva < secEnd) {
+                DWORD dataSize   = sec.SizeOfRawData ? sec.SizeOfRawData : sec.Misc.VirtualSize;
+                DWORD dataOffset = sec.SizeOfRawData ? sec.PointerToRawData : sec.VirtualAddress;
+                std::string secName = parser->SectionName(&sec);
+                Logger::Log(Utils::Format("[+] OEP section identified as VMP region: %s (size: %u)", secName.c_str(), dataSize), LogLevel::INFO);
+                extractedBytecode.assign(base + dataOffset, base + dataOffset + dataSize);
+                return true;
+            }
+        }
+    }
     for (auto& sec : sections) {
         std::string secName = parser->SectionName(&sec);
-        DWORD rawSize = sec.SizeOfRawData;
 
-        if (rawSize == 0) {
-            Logger::Log(Utils::Format("[!] Skipping section %s: raw size is 0", secName.c_str()), LogLevel::WARNING);
+        DWORD dataSize   = sec.SizeOfRawData ? sec.SizeOfRawData : sec.Misc.VirtualSize;
+        DWORD dataOffset = sec.SizeOfRawData ? sec.PointerToRawData : sec.VirtualAddress;
 
-            // If it's executable, log it as suspicious
-            if ((sec.Characteristics & IMAGE_SCN_MEM_EXECUTE) != 0) {
-                Logger::Log(Utils::Format("[!] Section %s is executable but empty — may be runtime-modified (suspicious)", secName.c_str()), LogLevel::WARNING);
-            }
-
+        if (dataSize == 0) {
+            Logger::Log(Utils::Format("[!] Skipping section %s: no data", secName.c_str()), LogLevel::WARNING);
             continue;
         }
 
-        BYTE* data = base + sec.PointerToRawData;
-        Logger::Log(Utils::Format("[+] Checking section: %s, size: %u", secName.c_str(), rawSize), LogLevel::DEBUG);
+        BYTE* data = base + dataOffset;
+        Logger::Log(Utils::Format("[+] Checking section: %s, size: %u", secName.c_str(), dataSize), LogLevel::DEBUG);
 
-        if (IsLikelyVMBytecode(data, rawSize)) {
-            extractedBytecode.assign(data, data + rawSize);
+        if (IsLikelyVMBytecode(data, dataSize)) {
+            extractedBytecode.assign(data, data + dataSize);
             Logger::Log(Utils::Format("[+] Extracted suspicious VM bytecode from: %s", secName.c_str()), LogLevel::INFO);
             return true;
         }

@@ -81,18 +81,13 @@ void ShellcodeDumper::Dump(PEParser& parser) {
     Logger::Log("[*] Scanning for decrypted shellcode in: " + filePath, LogLevel::INFO);
 
     
-    
-
-    // Step 3: Scan for shellcode-like patterns
     if (ScanForShellcode()) {
         Logger::Log("[-] No shellcode patterns detected in the binary.", LogLevel::WARNING);
         return;
     }
 
-    // Step 4: Create output dump path
     std::string dumpPath = "decrypted_shellcode.bin";
 
-    // Step 5: Dump to file
     if (DumpShellcode(dumpPath)) {
         Logger::Log("[+] Shellcode successfully dumped to: " + dumpPath, LogLevel::INFO);
     }

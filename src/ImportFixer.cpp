@@ -59,7 +59,7 @@ DWORD ImportFixer::RVAToOffset(DWORD rva) {
     return 0;
 }
 void ImportFixer::Fix(PEParser& parser) {
-    
+
     auto importMap = ScanForImports(parser);
 
     if (importMap.empty()) {
@@ -67,150 +67,141 @@ void ImportFixer::Fix(PEParser& parser) {
         return;
     }
 
+    Logger::Log(Utils::Format("[+] Existing import table valid (%u DLLs) — skipping rebuild to preserve runtime IAT.", (unsigned)importMap.size()), LogLevel::INFO);
+    return;
+
     Logger::Log("[+] Rebuilding import table...", LogLevel::INFO);
 
     BYTE* image = parser.GetMappedImage();
     size_t imageSize = parser.GetImageSize();
     PIMAGE_NT_HEADERS nt = parser.GetNtHeaders();
 
-    
-    IMAGE_SECTION_HEADER newSec = { 0 };
-    strcpy_s((char*)newSec.Name,8, ".idata");
+    DWORD descBytes = (DWORD)(importMap.size() + 1) * sizeof(IMAGE_IMPORT_DESCRIPTOR);
+    DWORD dataBytes = 0;
+    for (auto& kv : importMap) {
+        dataBytes += (DWORD)(kv.second.size() + 1) * sizeof(IMAGE_THUNK_DATA64); // INT
+        dataBytes += (DWORD)(kv.second.size() + 1) * sizeof(IMAGE_THUNK_DATA64); // IAT
+        for (auto& fn : kv.second)
+            dataBytes += 2 + (DWORD)fn.size() + 1; // hint + name + null
+        dataBytes += (DWORD)kv.first.size() + 1;   // dll name + null
+    }
+    DWORD idataRawSize = ALIGN(descBytes + dataBytes, nt->OptionalHeader.FileAlignment);
+    if (idataRawSize < 0x1000) idataRawSize = 0x1000;
 
-    newSec.Misc.VirtualSize = 0x1000;
-    newSec.SizeOfRawData = 0x1000;
-    newSec.VirtualAddress = ALIGN(nt->OptionalHeader.SizeOfImage, nt->OptionalHeader.SectionAlignment);
-    newSec.PointerToRawData = ALIGN(imageSize, nt->OptionalHeader.FileAlignment);
-    newSec.Characteristics = IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE;
+    IMAGE_SECTION_HEADER newSec = {};
+    strcpy_s((char*)newSec.Name, 8, ".idata");
+    newSec.Misc.VirtualSize = idataRawSize;
+    newSec.SizeOfRawData    = idataRawSize;
+    newSec.VirtualAddress   = ALIGN(nt->OptionalHeader.SizeOfImage, nt->OptionalHeader.SectionAlignment);
+    newSec.PointerToRawData = ALIGN((DWORD)imageSize, nt->OptionalHeader.FileAlignment);
+    newSec.Characteristics  = IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE;
 
-    
-    auto allSections = parser.GetAllSectionHeaders();
-    BYTE* extendedImage = new BYTE[newSec.PointerToRawData + newSec.SizeOfRawData];
-    memcpy(extendedImage, image, imageSize);
-    memset(extendedImage + newSec.PointerToRawData, 0, newSec.SizeOfRawData);
+    size_t totalSize = (size_t)newSec.PointerToRawData + newSec.SizeOfRawData;
+    BYTE* extImage = new BYTE[totalSize]();
+    memcpy(extImage, image, imageSize);
 
-    BYTE* idataBase = extendedImage + newSec.PointerToRawData;
-    DWORD idataRVA = newSec.VirtualAddress;
-    DWORD offset = 0;
+    BYTE* idataBase = extImage + newSec.PointerToRawData; // write offsets are section-local
+    DWORD idataRVA  = newSec.VirtualAddress;
 
-    std::vector<IMAGE_IMPORT_DESCRIPTOR> descriptors;
+    // writePos = section-local byte offset for sequential data after descriptor table
+    DWORD writePos = descBytes;
+    std::vector<IMAGE_IMPORT_DESCRIPTOR> descs;
 
-    for (auto& pair : importMap) {
-        const std::string& dll = pair.first;
-        const auto& funcs = pair.second;
+    for (auto& kv : importMap) {
+        const std::string& dll = kv.first;
+        const auto& funcs = kv.second;
 
-        DWORD thunkRVA = idataRVA + offset + sizeof(IMAGE_IMPORT_DESCRIPTOR) * (importMap.size() + 1);
-        DWORD nameRVA = thunkRVA + (funcs.size() + 1) * sizeof(IMAGE_THUNK_DATA);
+        // INT array (section-local offset)
+        DWORD intLocalOff = writePos;
+        writePos += (DWORD)(funcs.size() + 1) * sizeof(IMAGE_THUNK_DATA64);
 
-        IMAGE_IMPORT_DESCRIPTOR desc = { 0 };
-        desc.OriginalFirstThunk = thunkRVA;
-        desc.FirstThunk = thunkRVA;
+        // IAT array
+        DWORD iatLocalOff = writePos;
+        writePos += (DWORD)(funcs.size() + 1) * sizeof(IMAGE_THUNK_DATA64);
 
-        DWORD thunkOffset = nameRVA;
-        DWORD thunkIndex = 0;
-
-        for (const auto& func : funcs) {
-            DWORD hintNameRVA = idataRVA + thunkOffset;
-            IMAGE_THUNK_DATA thunk = { 0 };
-            thunk.u1.AddressOfData = hintNameRVA;
-            memcpy(idataBase + thunkRVA + thunkIndex * sizeof(IMAGE_THUNK_DATA), &thunk, sizeof(thunk));
+        // IBN entries + dll name
+        DWORD funcIdx = 0;
+        for (const auto& fn : funcs) {
+            DWORD ibnRVA = idataRVA + writePos;
+            IMAGE_THUNK_DATA64 t = {};
+            t.u1.AddressOfData = ibnRVA;
+            memcpy(idataBase + intLocalOff + funcIdx * sizeof(IMAGE_THUNK_DATA64), &t, sizeof(t));
+            memcpy(idataBase + iatLocalOff + funcIdx * sizeof(IMAGE_THUNK_DATA64), &t, sizeof(t));
 
             WORD hint = 0;
-            memcpy(idataBase + thunkOffset, &hint, sizeof(hint));
-            strcpy_s((char*)(idataBase + thunkOffset + 2), 100, func.c_str());
-
-            thunkOffset += 2 + (DWORD)func.length() + 1;
-            thunkIndex++;
+            memcpy(idataBase + writePos, &hint, 2);
+            memcpy(idataBase + writePos + 2, fn.c_str(), fn.size() + 1);
+            writePos += 2 + (DWORD)fn.size() + 1;
+            ++funcIdx;
         }
 
-       
-        IMAGE_THUNK_DATA zeroThunk = { 0 };
-        memcpy(idataBase + thunkRVA + thunkIndex * sizeof(IMAGE_THUNK_DATA), &zeroThunk, sizeof(zeroThunk));
+        DWORD dllNameRVA = idataRVA + writePos;
+        memcpy(idataBase + writePos, dll.c_str(), dll.size() + 1);
+        writePos += (DWORD)dll.size() + 1;
 
-        
-        DWORD dllNameRVA = idataRVA + thunkOffset;
-        strcpy_s((char*)(idataBase + thunkOffset), 100, dll.c_str());
-        desc.Name = dllNameRVA;
-
-        descriptors.push_back(desc);
-
-        offset = thunkOffset + (DWORD)dll.length() + 1;
+        IMAGE_IMPORT_DESCRIPTOR desc = {};
+        desc.OriginalFirstThunk = idataRVA + intLocalOff;
+        desc.FirstThunk         = idataRVA + iatLocalOff;
+        desc.Name               = dllNameRVA;
+        descs.push_back(desc);
     }
 
-   
-    for (size_t i = 0; i < descriptors.size(); ++i) {
-        memcpy(idataBase + i * sizeof(IMAGE_IMPORT_DESCRIPTOR), &descriptors[i], sizeof(IMAGE_IMPORT_DESCRIPTOR));
-    }
+    for (size_t i = 0; i < descs.size(); ++i)
+        memcpy(idataBase + i * sizeof(IMAGE_IMPORT_DESCRIPTOR), &descs[i], sizeof(IMAGE_IMPORT_DESCRIPTOR));
 
-    IMAGE_IMPORT_DESCRIPTOR nullDesc = { 0 };
-    memcpy(idataBase + descriptors.size() * sizeof(IMAGE_IMPORT_DESCRIPTOR), &nullDesc, sizeof(nullDesc));
-
-    
-    nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress = newSec.VirtualAddress;
-    nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].Size = offset;
-
-   
-    PIMAGE_SECTION_HEADER newSecPtr = IMAGE_FIRST_SECTION(nt) + nt->FileHeader.NumberOfSections;
+    PIMAGE_DOS_HEADER extDos = (PIMAGE_DOS_HEADER)extImage;
+    PIMAGE_NT_HEADERS extNt  = (PIMAGE_NT_HEADERS)(extImage + extDos->e_lfanew);
+    extNt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress = idataRVA;
+    extNt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].Size = descBytes + dataBytes;
+    PIMAGE_SECTION_HEADER newSecPtr = IMAGE_FIRST_SECTION(extNt) + extNt->FileHeader.NumberOfSections;
     *newSecPtr = newSec;
-    nt->FileHeader.NumberOfSections++;
-    nt->OptionalHeader.SizeOfImage = newSec.VirtualAddress + ALIGN(newSec.SizeOfRawData, nt->OptionalHeader.SectionAlignment);
+    extNt->FileHeader.NumberOfSections++;
+    extNt->OptionalHeader.SizeOfImage = newSec.VirtualAddress + ALIGN(newSec.SizeOfRawData, extNt->OptionalHeader.SectionAlignment);
 
-    
-    parser.ReplaceImage(extendedImage, newSec.PointerToRawData + newSec.SizeOfRawData);
-    delete[] extendedImage;
+    parser.ReplaceImage(extImage, totalSize);
+    delete[] extImage;
 
-    Logger::Log("[+] Import table rebuilt and injected.", LogLevel::INFO);
+    Logger::Log(Utils::Format("[+] Import table rebuilt: %u DLLs injected.", (unsigned)descs.size()), LogLevel::INFO);
 }
 
 
 std::map<std::string, std::set<std::string>> ImportFixer::ScanForImports(PEParser& parser) {
     std::map<std::string, std::set<std::string>> importMap;
 
-    
-    auto section = parser.GetSectionHeader(".text");
-    if (!section) {
-        Logger::Log("[-] .text section not found.", LogLevel::Error);
+    PIMAGE_NT_HEADERS nt = parser.GetNtHeaders();
+    if (!nt) return importMap;
+
+    IMAGE_DATA_DIRECTORY& importDir = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+    if (importDir.VirtualAddress == 0 || importDir.Size == 0) {
+        Logger::Log("[-] No import directory in dump.", LogLevel::WARNING);
         return importMap;
     }
 
-    BYTE* code = parser.GetMappedImage() + section->PointerToRawData;
-    size_t codeSize = section->SizeOfRawData;
-    DWORD codeVA = *(DWORD*)parser.RvaToVa(section->VirtualAddress);
+    BYTE* base = parser.GetMappedImage();
+    IMAGE_IMPORT_DESCRIPTOR* desc = (IMAGE_IMPORT_DESCRIPTOR*)(base + importDir.VirtualAddress);
 
-    csh handle;
-    cs_insn* insn;
-    size_t count;
+    // Walk import descriptors
+    while (desc->Name != 0) {
+        const char* dllName = (const char*)(base + desc->Name);
 
-    if (cs_open(CS_ARCH_X86, CS_MODE_64, &handle) != CS_ERR_OK) {
-        Logger::Log("[-] Capstone failed to initialize.", LogLevel::Error);
-        return importMap;
-    }
+        // Prefer OriginalFirstThunk for names; fall back to FirstThunk
+        DWORD thunkRva = desc->OriginalFirstThunk ? desc->OriginalFirstThunk : desc->FirstThunk;
+        IMAGE_THUNK_DATA64* thunk = (IMAGE_THUNK_DATA64*)(base + thunkRva);
 
-    count = cs_disasm(handle, code, codeSize, codeVA, 0, &insn);
-    if (count <= 0) {
-        cs_close(&handle);
-        Logger::Log("[-] Disassembly failed.", LogLevel::Error);
-        return importMap;
-    }
-
-    for (size_t i = 0; i < count; i++) {
-        if (insn[i].id == X86_INS_CALL || insn[i].id == X86_INS_JMP) {
-            cs_x86* x86 = &insn[i].detail->x86;
-            if (x86->op_count == 1 && x86->operands[0].type == X86_OP_MEM) {
-                uint64_t addr = x86->operands[0].mem.disp;
-                // Check if address is inside IAT
-                auto resolved = parser.ResolveIAT(addr);
-                if (!resolved.first.empty() && !resolved.second.empty()) {
-                    importMap[resolved.first].insert(resolved.second);
+        while (thunk->u1.AddressOfData != 0) {
+            if (!(thunk->u1.Ordinal & IMAGE_ORDINAL_FLAG64)) {
+                DWORD nameRva = (DWORD)(thunk->u1.AddressOfData);
+                if (nameRva < parser.GetImageSize()) {
+                    IMAGE_IMPORT_BY_NAME* ibn = (IMAGE_IMPORT_BY_NAME*)(base + nameRva);
+                    importMap[dllName].insert(std::string((char*)ibn->Name));
                 }
-
             }
+            ++thunk;
         }
+
+        ++desc;
     }
 
-    cs_free(insn, count);
-    cs_close(&handle);
-
-    Logger::Log(Utils::Format("[*] Found %zu import DLLs.", importMap.size()), LogLevel::INFO);
+    Logger::Log(Utils::Format("[*] Found %u import DLLs from existing table.", (unsigned)importMap.size()), LogLevel::INFO);
     return importMap;
 }

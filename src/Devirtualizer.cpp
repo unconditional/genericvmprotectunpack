@@ -48,8 +48,8 @@ bool Devirtualizer::DevirtualizeToFile(const std::string& outPath) {
     out.close();
     return true;
 }
-bool Devirtualizer::Devirtualize(PEParser* parser, const BYTE* region) {
-    
+bool Devirtualizer::Devirtualize(PEParser* parser, const BYTE* region, size_t regionSize) {
+
     csh handle;
     cs_insn* insn;
     size_t count;
@@ -63,7 +63,7 @@ bool Devirtualizer::Devirtualize(PEParser* parser, const BYTE* region) {
 
     Logger::Log("[*] Disassembling VM region for handler stubs...");
 
-    const size_t scanSize = 0x1000;  
+    const size_t scanSize = regionSize;  
     count = cs_disasm(handle, region, scanSize, (uint64_t)region, 0, &insn);
 
     if (count > 1) {

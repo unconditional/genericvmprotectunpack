@@ -1,0 +1,54 @@
+# Build output
+build/
+out/
+bin/
+*.exe
+*.dll
+*.pdb
+*.lib
+*.exp
+*.obj
+*.o
+*.til
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+*.cmake
+!CMakeLists.txt
+
+# MSVC / Visual Studio
+*.sln
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+*.tlog
+*.log
+*.lastbuildstate
+*.idb
+*.ilk
+*.aps
+*.ncb
+*.sdf
+.vs/
+x64/
+Debug/
+Release/
+
+# IDA databases
+*.id0
+*.id1
+*.id2
+*.nam
+*.idb
+*.i64
+
+# Unpacker artifacts
+unpacked_*.exe
+unpacked_dump.bin
+decrypted_shellcode.bin
+
+# OS
+Thumbs.db
+.DS_Store
