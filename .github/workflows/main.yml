@@ -1,0 +1,58 @@
+name: Build VMProtectUnpacker
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      # Cache vcpkg + built packages so Capstone doesn't rebuild every run
+      - name: Cache vcpkg
+        uses: actions/cache@v4
+        with:
+          path: C:/vcpkg/installed
+          key: vcpkg-capstone-x64-windows-${{ runner.os }}
+
+      - name: Install Capstone via vcpkg
+        shell: pwsh
+        run: |
+          if (!(Test-Path "C:/vcpkg")) {
+            git clone https://github.com/microsoft/vcpkg C:/vcpkg
+            C:/vcpkg/bootstrap-vcpkg.bat
+          }
+          C:/vcpkg/vcpkg.exe install capstone:x64-windows
+
+      - name: Stage Capstone into expected path
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "C:/Program Files/capstone/include"
+          New-Item -ItemType Directory -Force -Path "C:/Program Files/capstone/lib"
+          Copy-Item -Recurse -Force "C:/vcpkg/installed/x64-windows/include/*" "C:/Program Files/capstone/include/"
+          Copy-Item -Force "C:/vcpkg/installed/x64-windows/lib/capstone.lib" "C:/Program Files/capstone/lib/"
+          Copy-Item -Force "C:/vcpkg/installed/x64-windows/bin/capstone.dll" "C:/Program Files/capstone/lib/"
+
+      - name: Configure (CMake)
+        shell: pwsh
+        run: cmake -B build -S . -DCMAKE_BUILD_TYPE=Release -A x64
+
+      - name: Build
+        shell: pwsh
+        run: cmake --build build --config Release
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: VMProtectUnpacker
+          path: |
+            build/Release/VMProtectUnpacker.exe
+            build/**/*.dll
+          if-no-files-found: warn
