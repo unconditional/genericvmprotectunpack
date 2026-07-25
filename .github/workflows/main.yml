@@ -15,7 +15,6 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      # Cache vcpkg + built packages so Capstone doesn't rebuild every run
       - name: Cache vcpkg
         uses: actions/cache@v4
         with:
@@ -48,11 +47,19 @@ jobs:
         shell: pwsh
         run: cmake --build build --config Release
 
-      - name: Upload build artifact
+      # --- Step penting: copy capstone.dll ke folder yang sama dengan exe ---
+      - name: Copy capstone.dll next to exe
+        shell: pwsh
+        run: |
+          $exeDir = "build/Release"
+          if (!(Test-Path $exeDir)) { $exeDir = "build" }
+          Copy-Item -Force "C:/vcpkg/installed/x64-windows/bin/capstone.dll" "$exeDir/capstone.dll"
+
+      - name: Upload build artifact (exe + dll bundled)
         uses: actions/upload-artifact@v4
         with:
           name: VMProtectUnpacker
           path: |
             build/Release/VMProtectUnpacker.exe
-            build/**/*.dll
+            build/Release/capstone.dll
           if-no-files-found: warn
