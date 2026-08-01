@@ -100,7 +100,7 @@ bool VMProtectDetector::CheckEntryPointLocation()
         return true;
     }
 
-    Logger::Log("[*] Section containing OEP RVA: " + sec->Name, LogLevel::INFO);
+    Logger::Log("[*] Section containing OEP RVA: " + std::string((char *)section->Name, strnlen((char *)section->Name, 8)), LogLevel::INFO);
     return false;
 }
 
@@ -112,7 +112,7 @@ bool VMProtectDetector::CheckSectionEntropy()
         return false;
 
     double entropy = ComputeEntropy(sec);
-    Logger::Log("[*] Section containing OEP RVA: " + sec->Name + " has entropy: "  + entropy);
+    Logger::Log("[*] Section containing OEP RVA: " + std::string((char *)section->Name, strnlen((char *)section->Name, 8)) + " has entropy: "  + entropy);
 
     if (entropy > 7.5)
     {
@@ -133,7 +133,7 @@ bool VMProtectDetector::CheckGhostSections()
 
     for (auto &sec : sections)
     {
-        std::string name = SectionName(&sec);
+        std::string name = parser->SectionName(&sec);
         bool isCodeExec = (sec.Characteristics & IMAGE_SCN_CNT_CODE) &&
                            (sec.Characteristics & IMAGE_SCN_MEM_EXECUTE);
         bool isGhost = (sec.SizeOfRawData == 0 && sec.Misc.VirtualSize > 0x10000);

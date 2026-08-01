@@ -284,6 +284,7 @@ std::string PEParser::SectionName(const IMAGE_SECTION_HEADER *section) const
 
     return std::string(name);
 }
+
 bool PEParser::ReplaceImage(BYTE *newData, size_t newSize)
 {
 
