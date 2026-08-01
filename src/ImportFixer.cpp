@@ -76,7 +76,7 @@ void ImportFixer::Fix(PEParser &parser)
         return;
     }
 
-    Logger::Log(Utils::Format("[+] Existing import table valid (%u DLLs) — skipping rebuild to preserve runtime IAT.", (unsigned)importMap.size()), LogLevel::INFO);
+    Logger::Log(Utils::Format("[+] Existing import table valid (%u DLLs) - skipping rebuild to preserve runtime IAT.", (unsigned)importMap.size()), LogLevel::INFO);
     return;
 
     Logger::Log("[+] Rebuilding import table...", LogLevel::INFO);

@@ -193,6 +193,21 @@ namespace Utils
             }
             break;
 
+        case 'f':
+            if constexpr (std::is_floating_point_v<ValueType>)
+            {
+                oss << std::fixed << std::setprecision(6) << value;
+            }
+            else if constexpr (std::is_arithmetic_v<ValueType>)
+            {
+                oss << std::fixed << std::setprecision(6) << static_cast<double>(value);
+            }
+            else
+            {
+                oss << value;
+            }
+            break;
+
         default:
             oss << value;
             break;
@@ -216,7 +231,8 @@ namespace Utils
                     specifier == 'u' ||
                     specifier == 'x' ||
                     specifier == 'X' ||
-                    specifier == 'p')
+                    specifier == 'p' ||
+                    specifier == 'f')
                 {
                     WriteFormatValue(oss, specifier, value);
 
