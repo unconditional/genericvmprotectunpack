@@ -2,6 +2,7 @@
 #include "vmprotectunpacker/Logger.h"
 #include <capstone/capstone.h>
 #include <fstream>
+#include <windows.h>
 #include "vmprotectunpacker/Utils.h"
 
 
@@ -48,15 +49,35 @@ bool Devirtualizer::DevirtualizeToFile(const std::string& outPath) {
     out.close();
     return true;
 }
+
 bool Devirtualizer::Devirtualize(PEParser* parser, const BYTE* region, size_t regionSize) {
 
     csh handle;
     cs_insn* insn;
     size_t count;
+    cs_mode mode = CS_MODE_64;     // Default to 64-bit
+    cs_arch arch = CS_ARCH_X86;    // Architecture is x86 for both (x86 & x64)
 
-    cs_err err = cs_open(CS_ARCH_X86, mode, &handle);
+    // Check PE Magic Number to detect 32-bit
+    // Assuming 'pNtHeaders' is the pointer to IMAGE_NT_HEADERS
+    // If you only have 'pDosHeader', define pNtHeaders = (PIMAGE_NT_HEADERS)((LPBYTE)pDosHeader + pDosHeader->e_lfanew);
+    
+    if (pNtHeaders->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR32_MAGIC) { // 0x10B
+        mode = CS_MODE_32;
+        Log("[INFO] [+] Detected 32-bit PE (CS_MODE_32)\n");
+    } else if (pNtHeaders->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC) { // 0x20B
+        mode = CS_MODE_64;
+        Log("[INFO] [+] Detected 64-bit PE (CS_MODE_64)\n");
+    } else {
+        Log("[Error] [-] Unknown PE Magic: 0x%X\n", pNtHeaders->OptionalHeader.Magic);
+        return false;
+    }
+    
+    // 3. Initialize Capstone with the detected mode
+    cs_err err = cs_open(arch, mode, &handle);
     if (err != CS_ERR_OK) {
-        printf("[Error] [-] Capstone init failed. Error Code: %d\n", err);
+        // Print the specific error code to debug further issues
+        Log("[Error] [-] Capstone init failed. Error Code: %d (Mode: %d)\n", err, mode);
         return false;
     }
 
