@@ -62,3 +62,17 @@ jobs:
             build/Release/VMProtectUnpacker.exe
             build/Release/capstone.dll
           if-no-files-found: warn
+
+      - name: Verify capstone.dll matches vcpkg output
+        shell: pwsh
+        run: |
+          $vcpkgDll = "C:/vcpkg/installed/x64-windows/bin/capstone.dll"
+          $stagedDll = "C:/Program Files/capstone/lib/capstone.dll"
+          $vHash = (Get-FileHash $vcpkgDll -Algorithm SHA256).Hash
+          $sHash = (Get-FileHash $stagedDll -Algorithm SHA256).Hash
+          Write-Host "vcpkg dll hash:  $vHash"
+          Write-Host "staged dll hash: $sHash"
+          if ($vHash -ne $sHash) {
+              Write-Error "Staged capstone.dll does not match freshly built vcpkg capstone.dll!"
+              exit 1
+          }
