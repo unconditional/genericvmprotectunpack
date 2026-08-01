@@ -7,6 +7,8 @@
 #include <sstream>
 #include <cstring>
 #include <iomanip>
+#include <cstdint>
+#include <type_traits>
 
 inline std::string ToHex(uintptr_t addr)
 {
@@ -81,6 +83,122 @@ namespace Utils
         return std::string(fmt);
     }
 
+    template <typename T>
+    void WriteFormatValue(std::ostringstream &oss, char specifier, T value)
+    {
+        using ValueType = std::remove_cv_t<std::remove_reference_t<T>>;
+
+        switch (specifier)
+        {
+        case 's':
+            if constexpr (std::is_convertible_v<T, const char *>)
+            {
+                const char *text = value;
+                oss << (text != nullptr ? text : "(null)");
+            }
+            else
+            {
+                oss << value;
+            }
+            break;
+
+        case 'd':
+        case 'i':
+            if constexpr (std::is_enum_v<ValueType>)
+            {
+                using UnderlyingType = std::underlying_type_t<ValueType>;
+                oss << static_cast<long long>(
+                    static_cast<UnderlyingType>(value));
+            }
+            else if constexpr (std::is_arithmetic_v<ValueType>)
+            {
+                oss << static_cast<long long>(value);
+            }
+            else
+            {
+                oss << value;
+            }
+            break;
+
+        case 'u':
+            if constexpr (std::is_enum_v<ValueType>)
+            {
+                using UnderlyingType = std::underlying_type_t<ValueType>;
+                oss << static_cast<unsigned long long>(
+                    static_cast<UnderlyingType>(value));
+            }
+            else if constexpr (std::is_arithmetic_v<ValueType>)
+            {
+                oss << static_cast<unsigned long long>(value);
+            }
+            else
+            {
+                oss << value;
+            }
+            break;
+
+        case 'x':
+        case 'X':
+            if (specifier == 'X')
+                oss << std::uppercase;
+
+            oss << std::hex;
+
+            if constexpr (std::is_enum_v<ValueType>)
+            {
+                using UnderlyingType = std::underlying_type_t<ValueType>;
+                oss << static_cast<unsigned long long>(
+                    static_cast<UnderlyingType>(value));
+            }
+            else if constexpr (std::is_arithmetic_v<ValueType>)
+            {
+                oss << static_cast<unsigned long long>(value);
+            }
+            else if constexpr (std::is_pointer_v<ValueType>)
+            {
+                oss << reinterpret_cast<std::uintptr_t>(value);
+            }
+            else
+            {
+                oss << value;
+            }
+
+            oss << std::dec << std::nouppercase;
+            break;
+
+        case 'p':
+            if constexpr (std::is_pointer_v<ValueType>)
+            {
+                oss << "0x" << std::hex
+                    << reinterpret_cast<std::uintptr_t>(value)
+                    << std::dec;
+            }
+            else if constexpr (std::is_enum_v<ValueType>)
+            {
+                using UnderlyingType = std::underlying_type_t<ValueType>;
+                oss << "0x" << std::hex
+                    << static_cast<unsigned long long>(
+                           static_cast<UnderlyingType>(value))
+                    << std::dec;
+            }
+            else if constexpr (std::is_integral_v<ValueType>)
+            {
+                oss << "0x" << std::hex
+                    << static_cast<unsigned long long>(value)
+                    << std::dec;
+            }
+            else
+            {
+                oss << value;
+            }
+            break;
+
+        default:
+            oss << value;
+            break;
+        }
+    }
+
     template <typename T, typename... Args>
     std::string FormatImpl(const char *fmt, T value, Args... args)
     {
@@ -88,38 +206,27 @@ namespace Utils
 
         while (*fmt)
         {
-            if (*fmt == '%' && (*(fmt + 1) == 's' || *(fmt + 1) == 'u'))
+            if (*fmt == '%' && *(fmt + 1) != '\0')
             {
-                oss << value;
-                fmt += 2;
-                oss << FormatImpl(fmt, args...);
-                return oss.str();
+                const char specifier = *(fmt + 1);
+
+                if (specifier == 's' ||
+                    specifier == 'd' ||
+                    specifier == 'i' ||
+                    specifier == 'u' ||
+                    specifier == 'x' ||
+                    specifier == 'X' ||
+                    specifier == 'p')
+                {
+                    WriteFormatValue(oss, specifier, value);
+
+                    fmt += 2;
+                    oss << FormatImpl(fmt, args...);
+                    return oss.str();
+                }
             }
-            else if (*fmt == '%' && (*(fmt + 1) == 'd' || *(fmt + 1) == 'i'))
-            {
-                oss << static_cast<long long>(value);
-                fmt += 2;
-                oss << FormatImpl(fmt, args...);
-                return oss.str();
-            }
-            else if (*fmt == '%' && (*(fmt + 1) == 'x' || *(fmt + 1) == 'X'))
-            {
-                oss << std::hex << static_cast<unsigned long long>(value) << std::dec;
-                fmt += 2;
-                oss << FormatImpl(fmt, args...);
-                return oss.str();
-            }
-            else if (*fmt == '%' && *(fmt + 1) == 'p')
-            {
-                oss << "0x" << std::hex << reinterpret_cast<uintptr_t>(value) << std::dec;
-                fmt += 2;
-                oss << FormatImpl(fmt, args...);
-                return oss.str();
-            }
-            else
-            {
-                oss << *fmt++;
-            }
+
+            oss << *fmt++;
         }
 
         return oss.str();

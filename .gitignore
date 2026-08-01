@@ -52,3 +52,4 @@ decrypted_shellcode.bin
 # OS
 Thumbs.db
 .DS_Store
+log.txt
