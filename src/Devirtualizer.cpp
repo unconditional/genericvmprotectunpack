@@ -54,8 +54,9 @@ bool Devirtualizer::Devirtualize(PEParser* parser, const BYTE* region, size_t re
     cs_insn* insn;
     size_t count;
 
-    if (cs_open(CS_ARCH_X86, CS_MODE_64, &handle) != CS_ERR_OK) {
-        Logger::Log("[-] Capstone init failed.", LogLevel::Error);
+    cs_err err = cs_open(CS_ARCH_X86, mode, &handle);
+    if (err != CS_ERR_OK) {
+        printf("[Error] [-] Capstone init failed. Error Code: %d\n", err);
         return false;
     }
 
