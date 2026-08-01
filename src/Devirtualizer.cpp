@@ -64,7 +64,7 @@ bool Devirtualizer::Devirtualize(PEParser* parser, const BYTE* region, size_t re
         Logger::Log("[Error] [-] Failed to get NT Headers\n", LogLevel::Error);
         return false;
     }
-    
+
     if (pNtHeaders->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR32_MAGIC) { // 0x10B
         mode = CS_MODE_32;
         Logger::Log("[INFO] [+] Detected 32-bit PE (CS_MODE_32)\n");
@@ -78,8 +78,7 @@ bool Devirtualizer::Devirtualize(PEParser* parser, const BYTE* region, size_t re
         );
         return false;
     }
-    
-    // 3. Initialize Capstone with the detected mode
+
     cs_err err = cs_open(arch, mode, &handle);
     if (err != CS_ERR_OK) {
         Logger::Log(
@@ -93,7 +92,7 @@ bool Devirtualizer::Devirtualize(PEParser* parser, const BYTE* region, size_t re
 
     Logger::Log("[*] Disassembling VM region for handler stubs...");
 
-    const size_t scanSize = regionSize;  
+    const size_t scanSize = regionSize;
     count = cs_disasm(handle, region, scanSize, (uint64_t)region, 0, &insn);
 
     if (count > 1) {

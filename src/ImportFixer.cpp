@@ -23,16 +23,15 @@ bool ImportFixer::FixImports() {
     if (!LoadBinary()) return false;
     Logger::Log("[*] Loaded dumped binary. Fixing imports...");
 
-    
+
     guessedImports["kernel32.dll"] = {"LoadLibraryA", "GetProcAddress"};
 
     return RebuildImportTable();
 }
 
 bool ImportFixer::RebuildImportTable() {
-    
     Logger::Log("[*] Rebuilding Import Table...");
-   
+
     return true;
 }
 

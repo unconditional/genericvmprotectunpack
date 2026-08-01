@@ -10,43 +10,57 @@
 #include <capstone/capstone.h>
 #include <iomanip>
 
-static bool TextSectionPopulated(HANDLE hProcess, LPVOID imageBase, DWORD textRVA, size_t checkBytes = 256) {
+
+static bool TextSectionPopulated(HANDLE hProcess, LPVOID imageBase, DWORD textRVA, size_t checkBytes = 256)
+{
     std::vector<BYTE> buf(checkBytes, 0);
     SIZE_T r = 0;
-    if (!ReadProcessMemory(hProcess, (BYTE*)imageBase + textRVA, buf.data(), checkBytes, &r) || r == 0)
+    if (!ReadProcessMemory(hProcess, (BYTE *)imageBase + textRVA, buf.data(), checkBytes, &r) || r == 0)
         return false;
     for (size_t i = 0; i < r; ++i)
-        if (buf[i] != 0) return true;
+        if (buf[i] != 0)
+            return true;
     return false;
 }
 
-static void SuspendAllThreads(DWORD pid) {
+static void SuspendAllThreads(DWORD pid)
+{
     HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, pid);
-    if (hSnap == INVALID_HANDLE_VALUE) return;
-    THREADENTRY32 te = { sizeof(te) };
-    if (Thread32First(hSnap, &te)) {
-        do {
-            if (te.th32OwnerProcessID == pid) {
+    if (hSnap == INVALID_HANDLE_VALUE)
+        return;
+    THREADENTRY32 te = {sizeof(te)};
+    if (Thread32First(hSnap, &te))
+    {
+        do
+        {
+            if (te.th32OwnerProcessID == pid)
+            {
                 HANDLE hT = OpenThread(THREAD_SUSPEND_RESUME, FALSE, te.th32ThreadID);
-                if (hT) { SuspendThread(hT); CloseHandle(hT); }
+                if (hT)
+                {
+                    SuspendThread(hT);
+                    CloseHandle(hT);
+                }
             }
         } while (Thread32Next(hSnap, &te));
     }
     CloseHandle(hSnap);
 }
 
-bool VMPDebugger::Run(const std::string& exePath) {
-    STARTUPINFOA si = { sizeof(si) };
+bool VMPDebugger::Run(const std::string &exePath)
+{
+    STARTUPINFOA si = {sizeof(si)};
     PROCESS_INFORMATION pi = {};
 
     Logger::Log("[*] Launching target suspended (no debug attach)...");
     if (!CreateProcessA(exePath.c_str(), NULL, NULL, NULL, FALSE,
-        CREATE_SUSPENDED, NULL, NULL, &si, &pi)) {
+                        CREATE_SUSPENDED, NULL, NULL, &si, &pi))
+    {
         Logger::Log("[-] Failed to launch target", LogLevel::Error);
         return false;
     }
 
-    using pNtQIP = NTSTATUS(WINAPI*)(HANDLE, PROCESSINFOCLASS, PVOID, ULONG, PULONG);
+    using pNtQIP = NTSTATUS(WINAPI *)(HANDLE, PROCESSINFOCLASS, PVOID, ULONG, PULONG);
     auto NtQueryInformationProcess = (pNtQIP)GetProcAddress(
         GetModuleHandleA("ntdll.dll"), "NtQueryInformationProcess");
 
@@ -54,24 +68,52 @@ bool VMPDebugger::Run(const std::string& exePath) {
     NtQueryInformationProcess(pi.hProcess, ProcessBasicInformation, &pbi, sizeof(pbi), NULL);
 
     PVOID imageBase = nullptr;
-    ReadProcessMemory(pi.hProcess, (BYTE*)pbi.PebBaseAddress + 0x10, &imageBase, sizeof(PVOID), nullptr);
+    ReadProcessMemory(pi.hProcess, (BYTE *)pbi.PebBaseAddress + 0x10, &imageBase, sizeof(PVOID), nullptr);
 
     BYTE headers[0x1000] = {};
     ReadProcessMemory(pi.hProcess, imageBase, headers, sizeof(headers), nullptr);
 
-    auto* dos = (IMAGE_DOS_HEADER*)headers;
-    auto* nt  = (IMAGE_NT_HEADERS64*)((BYTE*)headers + dos->e_lfanew);
-    SIZE_T  imgSize = nt->OptionalHeader.SizeOfImage;
-    DWORD   oepRVA  = nt->OptionalHeader.AddressOfEntryPoint;
-    LPVOID  oepVA   = (BYTE*)imageBase + oepRVA;
+    auto *dos = (IMAGE_DOS_HEADER *)headers;
+
+    // Check architecture type via Magic number
+    auto *nt_generic = (IMAGE_NT_HEADERS32 *)((BYTE *)headers + dos->e_lfanew);
+    cs_mode capstoneMode = CS_MODE_64;
+    SIZE_T imgSize = nt_generic->OptionalHeader.SizeOfImage;
+    DWORD oepRVA = nt_generic->OptionalHeader.AddressOfEntryPoint;
+    LPVOID oepVA = (BYTE *)imageBase + oepRVA;
+    int numberOfSections = (int)nt_generic->FileHeader.NumberOfSections;
+
+    if (nt_generic->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR32_MAGIC)
+    {
+        auto *nt32 = (IMAGE_NT_HEADERS32 *)nt_generic;
+        capstoneMode = CS_MODE_32;
+        imgSize = nt32->OptionalHeader.SizeOfImage;
+        oepRVA = nt32->OptionalHeader.AddressOfEntryPoint;
+        oepVA = (BYTE *)imageBase + oepRVA;
+        numberOfSections = (int)nt32->FileHeader.NumberOfSections;
+    }
+    else if (nt_generic->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC)
+    {
+        auto *nt64 = (IMAGE_NT_HEADERS64 *)nt_generic;
+        capstoneMode = CS_MODE_64;
+        imgSize = nt64->OptionalHeader.SizeOfImage;
+        oepRVA = nt64->OptionalHeader.AddressOfEntryPoint;
+        oepVA = (BYTE *)imageBase + oepRVA;
+        numberOfSections = (int)nt64->FileHeader.NumberOfSections;
+    }
 
     // Find .text section RVA
-    IMAGE_SECTION_HEADER* secs = IMAGE_FIRST_SECTION(nt);
+    IMAGE_SECTION_HEADER *secs = IMAGE_FIRST_SECTION(nt);
     DWORD textRVA = 0x1000;
-    for (int i = 0; i < nt->FileHeader.NumberOfSections; ++i) {
+    for (int i = 0; i < numberOfSections; ++i)
+    {
         char name[9] = {};
         memcpy(name, secs[i].Name, 8);
-        if (strcmp(name, ".text") == 0) { textRVA = secs[i].VirtualAddress; break; }
+        if (strcmp(name, ".text") == 0)
+        {
+            textRVA = secs[i].VirtualAddress;
+            break;
+        }
     }
 
     Logger::Log("[+] ImageBase: 0x" + ToHex((uintptr_t)imageBase));
@@ -84,17 +126,20 @@ bool VMPDebugger::Run(const std::string& exePath) {
     bool dumpDone = false;
     const int MAX_POLLS = 3000; // 30 seconds
 
-    for (int poll = 0; poll < MAX_POLLS; ++poll) {
+    for (int poll = 0; poll < MAX_POLLS; ++poll)
+    {
         Sleep(10);
 
         DWORD exitCode = STILL_ACTIVE;
         GetExitCodeProcess(pi.hProcess, &exitCode);
         bool dead = (exitCode != STILL_ACTIVE);
 
-        if (TextSectionPopulated(pi.hProcess, imageBase, textRVA, 256)) {
+        if (TextSectionPopulated(pi.hProcess, imageBase, textRVA, 256))
+        {
             Logger::Log("[+] .text populated after ~" + std::to_string(poll * 10) + "ms");
 
-            if (!dead) {
+            if (!dead)
+            {
                 Sleep(50);
                 SuspendAllThreads(pi.dwProcessId);
             }
@@ -103,21 +148,33 @@ bool VMPDebugger::Run(const std::string& exePath) {
             SIZE_T hr = 0;
             ReadProcessMemory(pi.hProcess, imageBase, hdrBuf, sizeof(hdrBuf), &hr);
             SIZE_T finalSize = imgSize;
-            if (hr > 0x40) {
-                auto* dos2 = (IMAGE_DOS_HEADER*)hdrBuf;
-                if (dos2->e_magic == IMAGE_DOS_SIGNATURE) {
-                    auto* nt2 = (IMAGE_NT_HEADERS64*)(hdrBuf + dos2->e_lfanew);
-                    if (nt2->OptionalHeader.SizeOfImage > 0)
-                        finalSize = nt2->OptionalHeader.SizeOfImage;
+            if (hr > 0x40)
+            {
+                auto *dos2 = (IMAGE_DOS_HEADER *)hdrBuf;
+                if (dos2->e_magic == IMAGE_DOS_SIGNATURE)
+                {
+                    auto* nt_generic = (IMAGE_NT_HEADERS32*)((BYTE*)hdrBuf + dos2->e_lfanew);
+                    if (nt_generic->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR32_MAGIC) {
+                        auto* nt32 = (IMAGE_NT_HEADERS32*)nt_generic;
+                        if (nt32->OptionalHeader.SizeOfImage > 0)
+                            finalSize = nt32->OptionalHeader.SizeOfImage;
+                    }
+                    else if (nt_generic->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC) {
+                        auto* nt64 = (IMAGE_NT_HEADERS64*)nt_generic;
+                        if (nt64->OptionalHeader.SizeOfImage > 0)
+                            finalSize = nt64->OptionalHeader.SizeOfImage;
+                    }
                 }
             }
 
             dumpDone = DumpProcessImage(pi.hProcess, imageBase, finalSize, "unpacked_dump.bin");
-            if (!dead) TerminateProcess(pi.hProcess, 0);
+            if (!dead)
+                TerminateProcess(pi.hProcess, 0);
             break;
         }
 
-        if (dead) {
+        if (dead)
+        {
             Logger::Log("[!] Process exited (0x" + ToHex((uintptr_t)exitCode) +
                         ") before .text was populated — VMP killed itself pre-initialization.");
             // Last-chance dump even if .text is zero
@@ -131,69 +188,82 @@ bool VMPDebugger::Run(const std::string& exePath) {
 
     // Disassemble OEP from live/terminated process for diagnostics
     processHandle = pi.hProcess;
-    Disassemble(oepVA, 0x40);
+    Disassemble(oepVA, 0x40, capstoneMode);
 
     processHandle = pi.hProcess;
-    threadHandle  = pi.hThread;
+    threadHandle = pi.hThread;
 
     return dumpDone;
 }
 
-
-bool VMPDebugger::DumpProcessImage(HANDLE hProcess, LPVOID baseAddress, SIZE_T imageSize, const std::string& dumpPath) {
+bool VMPDebugger::DumpProcessImage(HANDLE hProcess, LPVOID baseAddress, SIZE_T imageSize, const std::string &dumpPath)
+{
     std::vector<BYTE> buffer(imageSize);
     SIZE_T bytesRead = 0;
 
-    if (!ReadProcessMemory(hProcess, baseAddress, buffer.data(), imageSize, &bytesRead) || bytesRead == 0) {
+    if (!ReadProcessMemory(hProcess, baseAddress, buffer.data(), imageSize, &bytesRead) || bytesRead == 0)
+    {
         Logger::Log("[-] ReadProcessMemory failed.", LogLevel::Error);
         return false;
     }
-    if (bytesRead < imageSize) {
+    if (bytesRead < imageSize)
+    {
         Logger::Log("[*] Partial read: " + std::to_string(bytesRead) + "/" + std::to_string(imageSize) + " bytes");
         buffer.resize(bytesRead);
     }
 
     std::ofstream outFile(dumpPath, std::ios::binary);
-    if (!outFile) {
+    if (!outFile)
+    {
         Logger::Log("[-] Failed to open dump file: " + dumpPath, LogLevel::Error);
         return false;
     }
 
-    outFile.write(reinterpret_cast<const char*>(buffer.data()), buffer.size());
+    outFile.write(reinterpret_cast<const char *>(buffer.data()), buffer.size());
     outFile.close();
     Logger::Log("[+] Dumped " + std::to_string(buffer.size()) + " bytes to: " + dumpPath);
 
     std::ostringstream oss;
     size_t preview = std::min<size_t>(128, buffer.size());
-    for (size_t i = 0; i < preview; ++i) {
-        if (i % 16 == 0) oss << "\n" << std::hex << std::setw(8) << std::setfill('0') << i << ": ";
+    for (size_t i = 0; i < preview; ++i)
+    {
+        if (i % 16 == 0)
+            oss << "\n"
+                << std::hex << std::setw(8) << std::setfill('0') << i << ": ";
         oss << std::hex << std::setw(2) << std::setfill('0') << (int)buffer[i] << " ";
     }
     Logger::Log("[*] Dump hex preview:" + oss.str());
     return true;
 }
 
-bool VMPDebugger::Disassemble(LPVOID address, size_t size) {
+bool VMPDebugger::Disassemble(LPVOID address, size_t size, cs_mode mode)
+{
     std::vector<uint8_t> buffer(size);
     SIZE_T bytesRead = 0;
 
-    if (!ReadProcessMemory(processHandle, address, buffer.data(), size, &bytesRead)) {
+    if (!ReadProcessMemory(processHandle, address, buffer.data(), size, &bytesRead))
+    {
         Logger::Log("[-] Failed to read memory for disassembly", LogLevel::Error);
         return false;
     }
 
     csh handle;
-    cs_insn* insn;
-
-    if (cs_open(CS_ARCH_X86, CS_MODE_64, &handle) != CS_ERR_OK) {
-        Logger::Log("[-] Capstone init failed", LogLevel::Error);
+    cs_insn *insn;
+    cs_err err = cs_open(CS_ARCH_X86, mode, &handle);
+    if (err != CS_ERR_OK)
+    {
+        Logger::Log(
+            Utils::Format("[Error] [-] Capstone init failed. Error Code: %d (Mode: %d)", err, mode),
+            LogLevel::Error);
         return false;
     }
 
     size_t count = cs_disasm(handle, buffer.data(), bytesRead, (uint64_t)address, 0, &insn);
-    if (count > 0) {
+    if (count > 0)
+    {
         Logger::Log("[+] OEP disassembly:");
-        for (size_t i = 0; i < count && i < 16; i++) {
+        for (size_t i = 0; i < count && i < 16; i++)
+        {
             std::ostringstream oss;
             oss << "  0x" << std::hex << insn[i].address << ": "
                 << insn[i].mnemonic << " " << insn[i].op_str;
@@ -201,6 +271,7 @@ bool VMPDebugger::Disassemble(LPVOID address, size_t size) {
         }
         cs_free(insn, count);
     }
+
     cs_close(&handle);
     return count > 0;
 }

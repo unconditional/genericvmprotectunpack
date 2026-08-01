@@ -20,6 +20,6 @@ private:
 
     // Helper to dump memory to a file
     bool DumpProcessImage(HANDLE hProcess, LPVOID base, SIZE_T size, const std::string& outFile);
-    bool Disassemble(LPVOID address, size_t size = 32);
+    bool Disassemble(LPVOID address, size_t size = 32, cs_mode mode);
 
 };

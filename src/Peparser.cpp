@@ -6,30 +6,32 @@
 
 PEParser::PEParser() : filePath(""), hFile(NULL), hMapping(NULL), mappedImage(nullptr), imageSize(0) {}
 
-PEParser::~PEParser() {
-    if (mappedImage) delete[] mappedImage;
-    if (hMapping) CloseHandle(hMapping);
-    if (hFile) CloseHandle(hFile);
+PEParser::~PEParser()
+{
+    if (mappedImage)
+        delete[] mappedImage;
+    if (hMapping)
+        CloseHandle(hMapping);
+    if (hFile)
+        CloseHandle(hFile);
 }
 
-bool PEParser::Load(const std::string& filepath) {
+bool PEParser::Load(const std::string &filepath)
+{
     filePath = filepath;
 
- 
-    STARTUPINFOA si = { sizeof(si) };
+    STARTUPINFOA si = {sizeof(si)};
     PROCESS_INFORMATION pi = {};
     std::string cmdLine = "\"" + filepath + "\"";
 
-
-    
     if (!CreateProcessA(
-        filePath.c_str(),        
-        NULL,                
-        NULL, NULL,          
-        FALSE,               
-        CREATE_SUSPENDED,          
-        NULL, NULL,          
-        &si, &pi))           
+            filePath.c_str(),
+            NULL,
+            NULL, NULL,
+            FALSE,
+            CREATE_SUSPENDED,
+            NULL, NULL,
+            &si, &pi))
     {
         Logger::Log("[-] Failed to create process in suspended mode.", LogLevel::Error);
         return false;
@@ -38,23 +40,21 @@ bool PEParser::Load(const std::string& filepath) {
     // Save the handle
     HANDLE hProcess = pi.hProcess;
 
-
-    typedef NTSTATUS(NTAPI* pfnNtQueryInformationProcess)(
+    typedef NTSTATUS(NTAPI * pfnNtQueryInformationProcess)(
         HANDLE,
         PROCESSINFOCLASS,
         PVOID,
         ULONG,
-        PULONG
-        );
+        PULONG);
 
     pfnNtQueryInformationProcess NtQueryInformationProcess =
         (pfnNtQueryInformationProcess)GetProcAddress(GetModuleHandleA("ntdll.dll"), "NtQueryInformationProcess");
 
-    if (!NtQueryInformationProcess) {
+    if (!NtQueryInformationProcess)
+    {
         Logger::Log("[-] Failed to resolve NtQueryInformationProcess.", LogLevel::Error);
         return false;
     }
-
 
     PROCESS_BASIC_INFORMATION pbi;
     ULONG retLen = 0;
@@ -64,45 +64,43 @@ bool PEParser::Load(const std::string& filepath) {
         ProcessBasicInformation,
         &pbi,
         sizeof(pbi),
-        &retLen
-    );
+        &retLen);
 
-    if (!NT_SUCCESS(status)) {
+    if (!NT_SUCCESS(status))
+    {
         Logger::Log("[-] NtQueryInformationProcess failed.", LogLevel::Error);
         return false;
     }
 
-
     PVOID pebAddress = pbi.PebBaseAddress;
     PVOID imageBaseAddr = nullptr;
 
-    
     SIZE_T bytesRead = 0;
     if (!ReadProcessMemory(
-        pi.hProcess,
-        (BYTE*)pebAddress + 0x10, // Offset to ImageBaseAddress
-        &imageBaseAddr,
-        sizeof(imageBaseAddr),
-        &bytesRead)) {
+            pi.hProcess,
+            (BYTE *)pebAddress + 0x10, // Offset to ImageBaseAddress
+            &imageBaseAddr,
+            sizeof(imageBaseAddr),
+            &bytesRead))
+    {
         Logger::Log("[-] Failed to read ImageBaseAddress from PEB.", LogLevel::Error);
         TerminateProcess(pi.hProcess, 0);
         return false;
     }
 
-    
     BYTE dosHeader[0x1000] = {};
-    if (!ReadProcessMemory(pi.hProcess, imageBaseAddr, dosHeader, sizeof(dosHeader), &bytesRead)) {
+    if (!ReadProcessMemory(pi.hProcess, imageBaseAddr, dosHeader, sizeof(dosHeader), &bytesRead))
+    {
         Logger::Log("[-] Failed to read DOS header.", LogLevel::Error);
         TerminateProcess(pi.hProcess, 0);
         return false;
     }
 
-    IMAGE_DOS_HEADER* idh = (IMAGE_DOS_HEADER*)dosHeader;
+    IMAGE_DOS_HEADER *idh = (IMAGE_DOS_HEADER *)dosHeader;
     IMAGE_NT_HEADERS64 nth = {};
 
-    if (!ReadProcessMemory(pi.hProcess,
-        (BYTE*)imageBaseAddr + idh->e_lfanew,
-        &nth, sizeof(nth), &bytesRead)) {
+    if (!ReadProcessMemory(pi.hProcess, (BYTE *)imageBaseAddr + idh->e_lfanew, &nth, sizeof(nth), &bytesRead))
+    {
         Logger::Log("[-] Failed to read NT headers.", LogLevel::Error);
         TerminateProcess(pi.hProcess, 0);
         return false;
@@ -111,7 +109,8 @@ bool PEParser::Load(const std::string& filepath) {
     SIZE_T imageSize = nth.OptionalHeader.SizeOfImage;
     mappedImage = new BYTE[imageSize];
 
-    if (!ReadProcessMemory(pi.hProcess, imageBaseAddr, mappedImage, imageSize, &bytesRead)) {
+    if (!ReadProcessMemory(pi.hProcess, imageBaseAddr, mappedImage, imageSize, &bytesRead))
+    {
         Logger::Log("[-] Failed to read full image from target process.", LogLevel::Error);
         TerminateProcess(pi.hProcess, 0);
         delete[] mappedImage;
@@ -123,7 +122,6 @@ bool PEParser::Load(const std::string& filepath) {
 
     Logger::Log("[+] Dumped process memory from suspended process.", LogLevel::INFO);
 
-    
     TerminateProcess(pi.hProcess, 0);
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);
@@ -131,237 +129,277 @@ bool PEParser::Load(const std::string& filepath) {
     return true;
 }
 
-
-BYTE* PEParser::GetMappedImage() {
+BYTE *PEParser::GetMappedImage()
+{
     return mappedImage;
 }
 
-size_t PEParser::GetImageSize() {
+size_t PEParser::GetImageSize()
+{
     return imageSize;
 }
 
-PIMAGE_NT_HEADERS PEParser::GetNtHeaders() {
-    if (!mappedImage) return nullptr;
+PIMAGE_NT_HEADERS PEParser::GetNtHeaders()
+{
+    if (!mappedImage)
+        return nullptr;
     PIMAGE_DOS_HEADER dos = (PIMAGE_DOS_HEADER)mappedImage;
-    if (dos->e_magic != IMAGE_DOS_SIGNATURE) return nullptr;
+    if (dos->e_magic != IMAGE_DOS_SIGNATURE)
+        return nullptr;
     PIMAGE_NT_HEADERS nt = (PIMAGE_NT_HEADERS)(mappedImage + dos->e_lfanew);
-    if (nt->Signature != IMAGE_NT_SIGNATURE) return nullptr;
+    if (nt->Signature != IMAGE_NT_SIGNATURE)
+        return nullptr;
     return nt;
 }
 
-PIMAGE_SECTION_HEADER PEParser::GetSectionHeader(const std::string& name) {
+PIMAGE_SECTION_HEADER PEParser::GetSectionHeader(const std::string &name)
+{
     PIMAGE_NT_HEADERS nt = GetNtHeaders();
-    if (!nt) return nullptr;
+    if (!nt)
+        return nullptr;
 
     PIMAGE_SECTION_HEADER section = IMAGE_FIRST_SECTION(nt);
-    for (int i = 0; i < nt->FileHeader.NumberOfSections; ++i, ++section) {
-        if (std::string((char*)section->Name, strnlen((char*)section->Name, 8)) == name)
+    for (int i = 0; i < nt->FileHeader.NumberOfSections; ++i, ++section)
+    {
+        if (std::string((char *)section->Name, strnlen((char *)section->Name, 8)) == name)
             return section;
     }
 
     return nullptr;
 }
 
- std::vector<IMAGE_SECTION_HEADER> PEParser::GetAllSectionHeaders() {
-        std::vector<IMAGE_SECTION_HEADER> sections;
+std::vector<IMAGE_SECTION_HEADER> PEParser::GetAllSectionHeaders()
+{
+    std::vector<IMAGE_SECTION_HEADER> sections;
 
-        IMAGE_NT_HEADERS* ntHeaders = GetNtHeaders();
-        if (!ntHeaders) return sections;
-
-        IMAGE_SECTION_HEADER* section = IMAGE_FIRST_SECTION(ntHeaders);
-        for (int i = 0; i < ntHeaders->FileHeader.NumberOfSections; ++i) {
-            sections.push_back(section[i]);
-        }
-
+    IMAGE_NT_HEADERS *ntHeaders = GetNtHeaders();
+    if (!ntHeaders)
         return sections;
+
+    IMAGE_SECTION_HEADER *section = IMAGE_FIRST_SECTION(ntHeaders);
+    for (int i = 0; i < ntHeaders->FileHeader.NumberOfSections; ++i)
+    {
+        sections.push_back(section[i]);
     }
 
- std::string PEParser::SectionName(const IMAGE_SECTION_HEADER* section) const {
-     if (!section) return "";
+    return sections;
+}
 
-     char name[9] = { 0 }; 
-     memcpy(name, section->Name, 8);
+std::string PEParser::SectionName(const IMAGE_SECTION_HEADER *section) const
+{
+    if (!section)
+        return "";
 
-     return std::string(name);
- }
- bool PEParser::ReplaceImage(BYTE* newData, size_t newSize) {
+    char name[9] = {0};
+    memcpy(name, section->Name, 8);
 
-     if (mappedImage) {
-         delete[] mappedImage;
-         mappedImage = nullptr;
-     }
+    return std::string(name);
+}
+bool PEParser::ReplaceImage(BYTE *newData, size_t newSize)
+{
 
-     if (hMapping) {
-         CloseHandle(hMapping);
-         hMapping = nullptr;
-     }
+    if (mappedImage)
+    {
+        delete[] mappedImage;
+        mappedImage = nullptr;
+    }
 
-     if (hFile) {
-         CloseHandle(hFile);
-         hFile = nullptr;
-     }
+    if (hMapping)
+    {
+        CloseHandle(hMapping);
+        hMapping = nullptr;
+    }
 
-     
-     mappedImage = new BYTE[newSize];
-     if (!mappedImage) return false;
+    if (hFile)
+    {
+        CloseHandle(hFile);
+        hFile = nullptr;
+    }
 
-     memcpy(mappedImage, newData, newSize);
-     imageSize = newSize;
+    mappedImage = new BYTE[newSize];
+    if (!mappedImage)
+        return false;
 
-     hFile = nullptr;
-     hMapping = nullptr;
+    memcpy(mappedImage, newData, newSize);
+    imageSize = newSize;
 
-     return true;
- }
- BYTE* PEParser::RvaToVa(DWORD rva) {
-     PIMAGE_NT_HEADERS nt = GetNtHeaders();
-     if (!nt) return nullptr;
+    hFile = nullptr;
+    hMapping = nullptr;
 
-     PIMAGE_SECTION_HEADER section = IMAGE_FIRST_SECTION(nt);
-     for (int i = 0; i < nt->FileHeader.NumberOfSections; ++i, ++section) {
-         DWORD sectionStart = section->VirtualAddress;
-         DWORD sectionEnd = sectionStart + max(section->Misc.VirtualSize, section->SizeOfRawData);
+    return true;
+}
+BYTE *PEParser::RvaToVa(DWORD rva)
+{
+    PIMAGE_NT_HEADERS nt = GetNtHeaders();
+    if (!nt)
+        return nullptr;
 
-         if (rva >= sectionStart && rva < sectionEnd) {
-             DWORD offset = rva - section->VirtualAddress;
-             DWORD base = section->PointerToRawData ? section->PointerToRawData : section->VirtualAddress;
-             return mappedImage + base + offset;
-         }
-     }
+    PIMAGE_SECTION_HEADER section = IMAGE_FIRST_SECTION(nt);
+    for (int i = 0; i < nt->FileHeader.NumberOfSections; ++i, ++section)
+    {
+        DWORD sectionStart = section->VirtualAddress;
+        DWORD sectionEnd = sectionStart + max(section->Misc.VirtualSize, section->SizeOfRawData);
 
-     // Fallback: within headers
-     if (rva < nt->OptionalHeader.SizeOfHeaders) {
-         return mappedImage + rva;
-     }
+        if (rva >= sectionStart && rva < sectionEnd)
+        {
+            DWORD offset = rva - section->VirtualAddress;
+            DWORD base = section->PointerToRawData ? section->PointerToRawData : section->VirtualAddress;
+            return mappedImage + base + offset;
+        }
+    }
 
-     return nullptr;
- }
- std::pair<std::string, std::string> PEParser::ResolveIAT(uint64_t addr) {
-     PIMAGE_NT_HEADERS nt = GetNtHeaders();
-     if (!nt) return { "", "" };
+    // Fallback: within headers
+    if (rva < nt->OptionalHeader.SizeOfHeaders)
+    {
+        return mappedImage + rva;
+    }
 
-     IMAGE_DATA_DIRECTORY importDir = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
-     if (importDir.VirtualAddress == 0 || importDir.Size == 0) {
-         return { "", "" }; // No imports
-     }
+    return nullptr;
+}
 
-     IMAGE_IMPORT_DESCRIPTOR* importDesc = (IMAGE_IMPORT_DESCRIPTOR*)RvaToVa(importDir.VirtualAddress);
-     if (!importDesc) return { "", "" };
+std::pair<std::string, std::string> PEParser::ResolveIAT(uint64_t addr)
+{
+    PIMAGE_NT_HEADERS nt = GetNtHeaders();
+    if (!nt)
+        return {"", ""};
 
-     while (importDesc->Name) {
-         const char* dllName = (const char*)RvaToVa(importDesc->Name);
+    IMAGE_DATA_DIRECTORY importDir = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+    if (importDir.VirtualAddress == 0 || importDir.Size == 0)
+    {
+        return {"", ""}; // No imports
+    }
 
-         // Thunks: where the actual imported addresses are written
-         IMAGE_THUNK_DATA* origThunk = (IMAGE_THUNK_DATA*)RvaToVa(importDesc->OriginalFirstThunk);
-         IMAGE_THUNK_DATA* thunk = (IMAGE_THUNK_DATA*)RvaToVa(importDesc->FirstThunk);
+    IMAGE_IMPORT_DESCRIPTOR *importDesc = (IMAGE_IMPORT_DESCRIPTOR *)RvaToVa(importDir.VirtualAddress);
+    if (!importDesc)
+        return {"", ""};
 
-         if (!thunk) {
-             importDesc++;
-             continue;
-         }
+    while (importDesc->Name)
+    {
+        const char *dllName = (const char *)RvaToVa(importDesc->Name);
 
-         for (; origThunk && thunk && origThunk->u1.AddressOfData; ++origThunk, ++thunk) {
-             // Only handle imported-by-name (not ordinal)
-             if (origThunk->u1.Ordinal & IMAGE_ORDINAL_FLAG) continue;
+        // Thunks: where the actual imported addresses are written
+        IMAGE_THUNK_DATA *origThunk = (IMAGE_THUNK_DATA *)RvaToVa(importDesc->OriginalFirstThunk);
+        IMAGE_THUNK_DATA *thunk = (IMAGE_THUNK_DATA *)RvaToVa(importDesc->FirstThunk);
 
-             IMAGE_IMPORT_BY_NAME* importByName = (IMAGE_IMPORT_BY_NAME*)RvaToVa((DWORD)origThunk->u1.AddressOfData);
-             if (!importByName) continue;
+        if (!thunk)
+        {
+            importDesc++;
+            continue;
+        }
 
-             void* iatAddress = (void*)(uintptr_t)(nt->OptionalHeader.ImageBase + thunk->u1.Function);
-             if ((uint64_t)iatAddress == addr) {
-                 return { std::string(dllName), std::string((char*)importByName->Name) };
-             }
-         }
+        for (; origThunk && thunk && origThunk->u1.AddressOfData; ++origThunk, ++thunk)
+        {
+            // Only handle imported-by-name (not ordinal)
+            if (origThunk->u1.Ordinal & IMAGE_ORDINAL_FLAG)
+                continue;
 
-         importDesc++;
-     }
+            IMAGE_IMPORT_BY_NAME *importByName = (IMAGE_IMPORT_BY_NAME *)RvaToVa((DWORD)origThunk->u1.AddressOfData);
+            if (!importByName)
+                continue;
 
-     return { "", "" }; // Not found
- }
- std::string& PEParser::GetFilePath() {
-     return filePath;
- }
+            void *iatAddress = (void *)(uintptr_t)(nt->OptionalHeader.ImageBase + thunk->u1.Function);
+            if ((uint64_t)iatAddress == addr)
+            {
+                return {std::string(dllName), std::string((char *)importByName->Name)};
+            }
+        }
 
- void PEParser::SetFilePath(std::string& outPath) {
-     filePath = outPath;
-     Load(filePath);
- }
+        importDesc++;
+    }
 
+    return {"", ""}; // Not found
+}
 
- bool PEParser::Save(const std::string& outputPath) const {
-     if (!mappedImage || imageSize == 0) {
-         return false;
-     }
+std::string &PEParser::GetFilePath()
+{
+    return filePath;
+}
 
-     std::ofstream outFile(outputPath, std::ios::binary);
-     if (!outFile) {
-         return false;
-     }
+void PEParser::SetFilePath(std::string &outPath)
+{
+    filePath = outPath;
+    Load(filePath);
+}
 
-     outFile.write(reinterpret_cast<const char*>(mappedImage), imageSize);
-     return outFile.good();
- }
+bool PEParser::Save(const std::string &outputPath) const
+{
+    if (!mappedImage || imageSize == 0)
+    {
+        return false;
+    }
 
- bool PEParser::LoadF(const std::string& filepath) {
-     filePath = filepath;
+    std::ofstream outFile(outputPath, std::ios::binary);
+    if (!outFile)
+    {
+        return false;
+    }
 
-     
-     hFile = CreateFileA(filepath.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL,
-         OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    outFile.write(reinterpret_cast<const char *>(mappedImage), imageSize);
+    return outFile.good();
+}
 
-     if (hFile == INVALID_HANDLE_VALUE) {
-         Logger::Log("[-] Failed to open file: " + filepath, LogLevel::Error);
-         return false;
-     }
+bool PEParser::LoadF(const std::string &filepath)
+{
+    filePath = filepath;
 
-     
-     WORD signature = 0;
-     DWORD bytesRead = 0;
-     BOOL readOk = ReadFile(hFile, &signature, sizeof(WORD), &bytesRead, NULL);
+    hFile = CreateFileA(filepath.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL,
+                        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
 
-     if (!readOk || signature != IMAGE_DOS_SIGNATURE) {
-         Logger::Log("[-] File is not a valid PE (missing MZ header): " + filepath, LogLevel::Error);
-         CloseHandle(hFile);
-         return false;
-     }
+    if (hFile == INVALID_HANDLE_VALUE)
+    {
+        Logger::Log("[-] Failed to open file: " + filepath, LogLevel::Error);
+        return false;
+    }
 
-     
-     SetFilePointer(hFile, 0, NULL, FILE_BEGIN);
+    WORD signature = 0;
+    DWORD bytesRead = 0;
+    BOOL readOk = ReadFile(hFile, &signature, sizeof(WORD), &bytesRead, NULL);
 
-    
-     imageSize = GetFileSize(hFile, NULL);
-     if (imageSize == INVALID_FILE_SIZE || imageSize == 0) {
-         Logger::Log("[-] Failed to get file size.", LogLevel::Error);
-         CloseHandle(hFile);
-         return false;
-     }
+    if (!readOk || signature != IMAGE_DOS_SIGNATURE)
+    {
+        Logger::Log("[-] File is not a valid PE (missing MZ header): " + filepath, LogLevel::Error);
+        CloseHandle(hFile);
+        return false;
+    }
 
-     // Read into a heap buffer so callers can modify headers in-place.
-     mappedImage = new BYTE[imageSize];
-     DWORD bytesRead2 = 0;
-     SetFilePointer(hFile, 0, NULL, FILE_BEGIN);
-     if (!ReadFile(hFile, mappedImage, (DWORD)imageSize, &bytesRead2, NULL) || bytesRead2 != imageSize) {
-         Logger::Log("[-] Failed to read file into buffer.", LogLevel::Error);
-         delete[] mappedImage;
-         mappedImage = nullptr;
-         CloseHandle(hFile);
-         return false;
-     }
+    SetFilePointer(hFile, 0, NULL, FILE_BEGIN);
 
-     CloseHandle(hFile);
-     hFile = NULL;
-     Logger::Log("[+] Successfully loaded PE file: " + filepath, LogLevel::INFO);
+    imageSize = GetFileSize(hFile, NULL);
+    if (imageSize == INVALID_FILE_SIZE || imageSize == 0)
+    {
+        Logger::Log("[-] Failed to get file size.", LogLevel::Error);
+        CloseHandle(hFile);
+        return false;
+    }
 
-     return true;
- }
+    // Read into a heap buffer so callers can modify headers in-place.
+    mappedImage = new BYTE[imageSize];
+    DWORD bytesRead2 = 0;
+    SetFilePointer(hFile, 0, NULL, FILE_BEGIN);
+    if (!ReadFile(hFile, mappedImage, (DWORD)imageSize, &bytesRead2, NULL) || bytesRead2 != imageSize)
+    {
+        Logger::Log("[-] Failed to read file into buffer.", LogLevel::Error);
+        delete[] mappedImage;
+        mappedImage = nullptr;
+        CloseHandle(hFile);
+        return false;
+    }
 
- DWORD PEParser::GetOEP() {
-     DWORD addressofentrypoint = GetNtHeaders()->OptionalHeader.AddressOfEntryPoint;
-     return (!addressofentrypoint) ? 0 : addressofentrypoint;
+    CloseHandle(hFile);
+    hFile = NULL;
+    Logger::Log("[+] Successfully loaded PE file: " + filepath, LogLevel::INFO);
 
- }
+    return true;
+}
 
- DWORD PEParser::GetImageBase() {
-     DWORD imgBase = GetNtHeaders()->OptionalHeader.ImageBase;
-     return(!imgBase) ? 0 : imgBase;
- }
+DWORD PEParser::GetOEP()
+{
+    DWORD addressofentrypoint = GetNtHeaders()->OptionalHeader.AddressOfEntryPoint;
+    return (!addressofentrypoint) ? 0 : addressofentrypoint;
+}
+
+DWORD PEParser::GetImageBase()
+{
+    DWORD imgBase = GetNtHeaders()->OptionalHeader.ImageBase;
+    return (!imgBase) ? 0 : imgBase;
+}
