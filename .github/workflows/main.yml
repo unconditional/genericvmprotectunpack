@@ -19,7 +19,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: C:/vcpkg/installed
-          key: vcpkg-capstone-x64-windows-${{ runner.os }}
+          key: vcpkg-capstone-x86feature-x64-windows-${{ runner.os }}-v2
 
       - name: Install Capstone via vcpkg
         shell: pwsh
@@ -28,7 +28,7 @@ jobs:
             git clone https://github.com/microsoft/vcpkg C:/vcpkg
             C:/vcpkg/bootstrap-vcpkg.bat
           }
-          C:/vcpkg/vcpkg.exe install capstone:x64-windows
+          C:/vcpkg/vcpkg.exe install "capstone[x86]:x64-windows"
 
       - name: Stage Capstone into expected path
         shell: pwsh
@@ -47,7 +47,6 @@ jobs:
         shell: pwsh
         run: cmake --build build --config Release
 
-      # --- Step penting: copy capstone.dll ke folder yang sama dengan exe ---
       - name: Copy capstone.dll next to exe
         shell: pwsh
         run: |
