@@ -28,6 +28,7 @@ public:
     bool PEParser::LoadF(const std::string& filepath);
     DWORD GetOEP();
     void PEParser::SetFilePath(std::string& outPath);
+    bool IsSuspendedDump() const { return isSuspendedDump; }
 
 private:
     std::string filePath;

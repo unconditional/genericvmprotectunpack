@@ -257,6 +257,7 @@ bool PEParser::ReplaceImage(BYTE *newData, size_t newSize)
 
     return true;
 }
+
 BYTE *PEParser::RvaToVa(DWORD rva)
 {
     PIMAGE_NT_HEADERS nt = GetNtHeadersRaw();
@@ -272,16 +273,17 @@ BYTE *PEParser::RvaToVa(DWORD rva)
         if (rva >= sectionStart && rva < sectionEnd)
         {
             DWORD offset = rva - section->VirtualAddress;
-            DWORD base = section->PointerToRawData ? section->PointerToRawData : section->VirtualAddress;
+            DWORD base;
+            if (isSuspendedDump)
+                base = section->VirtualAddress;   // memory-dump: offset == RVA
+            else
+                base = section->PointerToRawData ? section->PointerToRawData : section->VirtualAddress;
             return mappedImage + base + offset;
         }
     }
 
-    // Fallback: within headers
     if (rva < nt->OptionalHeader.SizeOfHeaders)
-    {
         return mappedImage + rva;
-    }
 
     return nullptr;
 }

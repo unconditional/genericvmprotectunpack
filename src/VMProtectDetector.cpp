@@ -81,8 +81,10 @@ bool VMProtectDetector::CheckSectionEntropy()
     if (!image)
         return false;
 
-    BYTE *sectionData = image + sec->PointerToRawData;
-    DWORD size = sec->SizeOfRawData;
+    DWORD offset = parser->IsSuspendedDump() ? sec->VirtualAddress : sec->PointerToRawData;
+    DWORD size = parser->IsSuspendedDump() ? sec->Misc.VirtualSize : sec->SizeOfRawData;
+
+    BYTE *sectionData = image + offset;
 
     std::map<BYTE, int> freq;
     for (DWORD i = 0; i < size; ++i)
