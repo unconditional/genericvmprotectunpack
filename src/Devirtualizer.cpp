@@ -72,15 +72,20 @@ bool Devirtualizer::Devirtualize(PEParser* parser, const BYTE* region, size_t re
         mode = CS_MODE_64;
         Logger::Log("[INFO] [+] Detected 64-bit PE (CS_MODE_64)\n");
     } else {
-        Logger::Log("[Error] [-] Unknown PE Magic: 0x%X\n", pNtHeaders->OptionalHeader.Magic);
+        Logger::Log(
+            Utils::Format("[Error] [-] Unknown PE Magic: 0x%X", pNtHeaders->OptionalHeader.Magic),
+            LogLevel::Error
+        );
         return false;
     }
     
     // 3. Initialize Capstone with the detected mode
     cs_err err = cs_open(arch, mode, &handle);
     if (err != CS_ERR_OK) {
-        // Print the specific error code to debug further issues
-        Logger::Log("[Error] [-] Capstone init failed. Error Code: %d (Mode: %d)\n", err, mode);
+        Logger::Log(
+            Utils::Format("[Error] [-] Capstone init failed. Error Code: %d (Mode: %d)", err, mode),
+            LogLevel::Error
+        );
         return false;
     }
 
