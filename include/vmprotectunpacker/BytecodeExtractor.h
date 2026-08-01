@@ -5,36 +5,34 @@
 #include <string>
 #include <Windows.h>
 
-class BytecodeExtractor {
+class BytecodeExtractor
+{
 public:
-    
-    BytecodeExtractor(PEParser* parser);
+    BytecodeExtractor(PEParser *parser);
 
-    
     bool ExtractVMBytecode();
 
-   
-    static std::vector<BYTE> Extract(PEParser* parser) {
+    static std::vector<BYTE> Extract(PEParser *parser)
+    {
         BytecodeExtractor extractor(parser);
-        if (extractor.ExtractVMBytecode()) {
+        if (extractor.ExtractVMBytecode())
+        {
             return extractor.GetExtractedBytecode();
         }
         return {};
     }
 
-   
-    const std::vector<BYTE>& GetExtractedBytecode() const;
+    const std::vector<BYTE> &GetExtractedBytecode() const;
 
-    
-    bool SaveBytecodeToFile(const std::string& outputPath);
+    bool SaveBytecodeToFile(const std::string &outputPath);
 
 private:
-    bool FindVMProtectSection(std::string& sectionName);
-    bool IsRWX(const IMAGE_SECTION_HEADER* section);
-    bool IsLikelyVMBytecode(BYTE* data, DWORD size);
-    bool IsExecutableSection(const IMAGE_SECTION_HEADER* section);
+    bool FindVMProtectSection(std::string &sectionName);
+    bool IsRWX(const IMAGE_SECTION_HEADER *section);
+    bool IsLikelyVMBytecode(BYTE *data, DWORD size);
+    bool IsExecutableSection(const IMAGE_SECTION_HEADER *section);
 
 private:
-    PEParser* parser;
+    PEParser *parser;
     std::vector<BYTE> extractedBytecode;
 };

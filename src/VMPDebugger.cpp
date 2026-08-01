@@ -121,7 +121,7 @@ bool VMPDebugger::Run(const std::string &exePath)
     Logger::Log("[+] .text RVA: 0x" + ToHex((uintptr_t)textRVA));
 
     ResumeThread(pi.hThread);
-    Logger::Log("[+] Process resumed — polling .text for VMP stub writes (max 30s)...");
+    Logger::Log("[+] Process resumed - polling .text for VMP stub writes (max 30s)...");
 
     bool dumpDone = false;
     const int MAX_POLLS = 3000; // 30 seconds
@@ -246,6 +246,18 @@ bool VMPDebugger::Disassemble(LPVOID address, size_t size, cs_mode mode)
         Logger::Log("[-] Failed to read memory for disassembly", LogLevel::Error);
         return false;
     }
+
+    int major = 0;
+    int minor = 0;
+    cs_version(&major, &minor);
+
+    Logger::Log(Utils::Format(
+        "[*] Capstone config: arch=%d, mode=%d, version=%d.%d, supports-x86=%d",
+        static_cast<int>(CS_ARCH_X86),
+        static_cast<int>(mode),
+        major,
+        minor,
+        cs_support(CS_ARCH_X86) ? 1 : 0));
 
     csh handle;
     cs_insn *insn;

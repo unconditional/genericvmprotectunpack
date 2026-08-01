@@ -1,7 +1,7 @@
 #pragma once
 #include <windows.h>
 #include <string>
-#include <vector> 
+#include <vector>
 
 class PEParser {
 public:
@@ -11,7 +11,11 @@ public:
     bool Load(const std::string& filepath);
     BYTE* GetMappedImage();
     size_t GetImageSize();
-    PIMAGE_NT_HEADERS GetNtHeaders();
+    bool IsPE64() const;                      // true = PE32+ (64-bit), false = PE32
+    PIMAGE_NT_HEADERS32 GetNtHeaders32();      // valid only if !IsPE64()
+    PIMAGE_NT_HEADERS64 GetNtHeaders64();      // valid only if IsPE64()
+    PIMAGE_NT_HEADERS   GetNtHeadersRaw();     // untyped, only for Signature/FileHeader access
+    ULONGLONG GetImageBase();                  // widen return type (was DWORD)
     PIMAGE_SECTION_HEADER GetSectionHeader(const std::string& name);
     std::vector<IMAGE_SECTION_HEADER> GetAllSectionHeaders();
     // Returns the name of a given IMAGE_SECTION_HEADER
@@ -23,7 +27,6 @@ public:
     bool Save(const std::string& outputPath) const;
     bool PEParser::LoadF(const std::string& filepath);
     DWORD GetOEP();
-    DWORD GetImageBase();
     void PEParser::SetFilePath(std::string& outPath);
 
 private:

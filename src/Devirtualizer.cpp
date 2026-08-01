@@ -53,36 +53,25 @@ bool Devirtualizer::Devirtualize(PEParser* parser, const BYTE* region, size_t re
     csh handle;
     cs_insn* insn;
     size_t count;
-    cs_mode mode = CS_MODE_64;     // Default to 64-bit
-    cs_arch arch = CS_ARCH_X86;    // Architecture is x86 for both (x86 & x64)
+    cs_arch arch = CS_ARCH_X86;
 
-    // Check PE Magic Number to detect 32-bit
-    // Assuming 'pNtHeaders' is the pointer to IMAGE_NT_HEADERS
-    // If you only have 'pDosHeader', define pNtHeaders = (PIMAGE_NT_HEADERS)((LPBYTE)pDosHeader + pDosHeader->e_lfanew);
-    PIMAGE_NT_HEADERS pNtHeaders = parser->GetNtHeaders();
-    if (!pNtHeaders) {
-        Logger::Log("[Error] [-] Failed to get NT Headers\n", LogLevel::Error);
+    if (!parser->GetNtHeadersRaw()) {
+        Logger::Log("[-] Failed to get NT Headers\n", LogLevel::Error);
         return false;
     }
 
-    if (pNtHeaders->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR32_MAGIC) { // 0x10B
-        mode = CS_MODE_32;
-        Logger::Log("[INFO] [+] Detected 32-bit PE (CS_MODE_32)\n");
-    } else if (pNtHeaders->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC) { // 0x20B
-        mode = CS_MODE_64;
-        Logger::Log("[INFO] [+] Detected 64-bit PE (CS_MODE_64)\n");
-    } else {
-        Logger::Log(
-            Utils::Format("[Error] [-] Unknown PE Magic: 0x%X", pNtHeaders->OptionalHeader.Magic),
-            LogLevel::Error
-        );
-        return false;
-    }
+    cs_mode mode = parser->IsPE64() ? CS_MODE_64 : CS_MODE_32;
+
+    Logger::Log(
+        parser->IsPE64()
+            ? "[+] Detected 64-bit PE (CS_MODE_64)\n"
+            : "[+] Detected 32-bit PE (CS_MODE_32)\n"
+    );
 
     cs_err err = cs_open(arch, mode, &handle);
     if (err != CS_ERR_OK) {
         Logger::Log(
-            Utils::Format("[Error] [-] Capstone init failed. Error Code: %d (Mode: %d)", err, mode),
+            Utils::Format("[-] Capstone init failed. Error Code: %d (Mode: %d)", err, mode),
             LogLevel::Error
         );
         return false;

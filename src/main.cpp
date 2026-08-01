@@ -15,43 +15,45 @@
 #include "vmprotectunpacker/Analyzer.h"
 
 
-
-int main(int argc, char* argv[]) {
-    if (argc < 2) {
+int main(int argc, char *argv[])
+{
+    if (argc < 2)
+    {
         std::cout << "Usage: unpacker.exe <malware.exe>" << std::endl;
         return 1;
     }
 
-    const char* exePath = argv[1];
+    const char *exePath = argv[1];
     Logger::Log(Utils::Format("[*] Loading executable: %s", exePath), LogLevel::INFO);
 
     std::string target = argv[1];
 
-    
     VMPDebugger debugger;
-    if (!debugger.Run(target)) {
+    if (!debugger.Run(target))
+    {
         Logger::Log("[-] Debugging failed.", LogLevel::Error);
         return 1;
     }
 
-    
     PEParser parser;
     std::string dumpedFile = "unpacked_dump.bin";
 
-    if (!parser.LoadF(dumpedFile)) {
+    if (!parser.LoadF(dumpedFile))
+    {
         Logger::Log("[-] Failed to load dumped PE. Trying shellcode disassembly...", LogLevel::Error);
 
-        if (!Analyzer::AnalyzeDump(dumpedFile)) {
+        if (!Analyzer::AnalyzeDump(dumpedFile))
+        {
             Logger::Log("[-] Shellcode analysis failed.", LogLevel::Error);
             return 1;
         }
 
-        return 0; 
+        return 0;
     }
 
-   
     std::string reason;
-    if (!VMProtectDetector::Detect(parser, reason)) {
+    if (!VMProtectDetector::Detect(parser, reason))
+    {
         Logger::Log("[-] VMProtect not detected. Exiting.", LogLevel::INFO);
         return 0;
     }
@@ -59,7 +61,8 @@ int main(int argc, char* argv[]) {
     Logger::Log("[+] VMProtect detected. Extracting bytecode...", LogLevel::INFO);
     auto bytecodeRegions = BytecodeExtractor::Extract(&parser);
 
-    if (bytecodeRegions.empty()) {
+    if (bytecodeRegions.empty())
+    {
         Logger::Log("[-] Failed to extract VMProtect bytecode.", LogLevel::Error);
         return 1;
     }
@@ -78,25 +81,48 @@ int main(int argc, char* argv[]) {
     output += std::string(strrchr(exePath, '\\') ? strrchr(exePath, '\\') + 1 : exePath);
 
     {
-        PIMAGE_NT_HEADERS nt = parser.GetNtHeaders();
-        if (nt) {
-            ULONGLONG runtimeBase = nt->OptionalHeader.ImageBase;
-            if (runtimeBase >= 0x7FF000000000ULL) {
-                nt->OptionalHeader.ImageBase = 0x140000000ULL;
-                Logger::Log(Utils::Format("[+] ImageBase restored: 0x%llx -> 0x140000000", runtimeBase), LogLevel::INFO);
+        PIMAGE_NT_HEADERS nt = parser.GetNtHeadersRaw();
+        if (nt)
+        {
+            if (parser.IsPE64())
+            {
+                PIMAGE_NT_HEADERS64 nt64 = parser.GetNtHeaders64();
+                ULONGLONG runtimeBase = nt64->OptionalHeader.ImageBase;
+
+                if (runtimeBase >= 0x7FF000000000ULL)
+                {
+                    nt64->OptionalHeader.ImageBase = 0x140000000ULL;
+                    Logger::Log(Utils::Format("[+] ImageBase restored: 0x%llx -> 0x140000000", runtimeBase), LogLevel::INFO);
+                }
+            }
+            else
+            {
+                PIMAGE_NT_HEADERS32 nt32 = parser.GetNtHeaders32();
+                DWORD runtimeBase = nt32->OptionalHeader.ImageBase;
+
+                // 32-bit processes rarely get relocated above 2GB unless ASLR/high-entropy is in play,
+                // but any base above the typical 0x400000 default is worth restoring.
+                if (runtimeBase >= 0x10000000UL)
+                {
+                    nt32->OptionalHeader.ImageBase = 0x400000UL;
+                    Logger::Log(Utils::Format("[+] ImageBase restored: 0x%lx -> 0x400000", runtimeBase), LogLevel::INFO);
+                }
             }
 
             PIMAGE_SECTION_HEADER sec = IMAGE_FIRST_SECTION(nt);
-            for (int i = 0; i < nt->FileHeader.NumberOfSections; ++i, ++sec) {
-                if (sec->Misc.VirtualSize != 0) {
+            for (int i = 0; i < nt->FileHeader.NumberOfSections; ++i, ++sec)
+            {
+                if (sec->Misc.VirtualSize != 0)
+                {
                     sec->PointerToRawData = sec->VirtualAddress;
-                    sec->SizeOfRawData    = sec->Misc.VirtualSize;
+                    sec->SizeOfRawData = sec->Misc.VirtualSize;
                 }
             }
         }
     }
 
-    if (!parser.Save(output.c_str())) {
+    if (!parser.Save(output.c_str()))
+    {
         Logger::Log("[-] Failed to save unpacked file.", LogLevel::Error);
         return 1;
     }
@@ -104,4 +130,3 @@ int main(int argc, char* argv[]) {
     Logger::Log(Utils::Format("[+] Unpacking complete. Output: %s", output.c_str()), LogLevel::INFO);
     return 0;
 }
-

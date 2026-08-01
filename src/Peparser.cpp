@@ -97,16 +97,20 @@ bool PEParser::Load(const std::string &filepath)
     }
 
     IMAGE_DOS_HEADER *idh = (IMAGE_DOS_HEADER *)dosHeader;
-    IMAGE_NT_HEADERS64 nth = {};
-
-    if (!ReadProcessMemory(pi.hProcess, (BYTE *)imageBaseAddr + idh->e_lfanew, &nth, sizeof(nth), &bytesRead))
+    BYTE ntHeaderBuf[sizeof(IMAGE_NT_HEADERS64)] = {};
+    if (!ReadProcessMemory(pi.hProcess, (BYTE *)imageBaseAddr + idh->e_lfanew, ntHeaderBuf, sizeof(ntHeaderBuf), &bytesRead))
     {
         Logger::Log("[-] Failed to read NT headers.", LogLevel::Error);
         TerminateProcess(pi.hProcess, 0);
         return false;
     }
 
-    SIZE_T imageSize = nth.OptionalHeader.SizeOfImage;
+    WORD optMagic = *reinterpret_cast<WORD *>(ntHeaderBuf + sizeof(DWORD) + sizeof(IMAGE_FILE_HEADER));
+    SIZE_T imageSize = 0;
+    if (optMagic == IMAGE_NT_OPTIONAL_HDR64_MAGIC)
+        imageSize = ((PIMAGE_NT_HEADERS64)ntHeaderBuf)->OptionalHeader.SizeOfImage;
+    else
+        imageSize = ((PIMAGE_NT_HEADERS32)ntHeaderBuf)->OptionalHeader.SizeOfImage;
     mappedImage = new BYTE[imageSize];
 
     if (!ReadProcessMemory(pi.hProcess, imageBaseAddr, mappedImage, imageSize, &bytesRead))
@@ -139,7 +143,7 @@ size_t PEParser::GetImageSize()
     return imageSize;
 }
 
-PIMAGE_NT_HEADERS PEParser::GetNtHeaders()
+PIMAGE_NT_HEADERS PEParser::GetNtHeadersRaw()
 {
     if (!mappedImage)
         return nullptr;
@@ -152,9 +156,34 @@ PIMAGE_NT_HEADERS PEParser::GetNtHeaders()
     return nt;
 }
 
+bool PEParser::IsPE64() const
+{
+    if (!mappedImage) return false;
+
+    PIMAGE_DOS_HEADER dos = (PIMAGE_DOS_HEADER)mappedImage;
+    if (dos->e_magic != IMAGE_DOS_SIGNATURE) return false;
+
+    PIMAGE_NT_HEADERS nt = (PIMAGE_NT_HEADERS)(mappedImage + dos->e_lfanew);
+    if (nt->Signature != IMAGE_NT_SIGNATURE) return false;
+
+    return nt->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC;
+}
+
+PIMAGE_NT_HEADERS32 PEParser::GetNtHeaders32()
+{
+    PIMAGE_NT_HEADERS nt = GetNtHeadersRaw();
+    return (nt && !IsPE64()) ? (PIMAGE_NT_HEADERS32)nt : nullptr;
+}
+
+PIMAGE_NT_HEADERS64 PEParser::GetNtHeaders64()
+{
+    PIMAGE_NT_HEADERS nt = GetNtHeadersRaw();
+    return (nt && IsPE64()) ? (PIMAGE_NT_HEADERS64)nt : nullptr;
+}
+
 PIMAGE_SECTION_HEADER PEParser::GetSectionHeader(const std::string &name)
 {
-    PIMAGE_NT_HEADERS nt = GetNtHeaders();
+    PIMAGE_NT_HEADERS nt = GetNtHeadersRaw();
     if (!nt)
         return nullptr;
 
@@ -172,7 +201,7 @@ std::vector<IMAGE_SECTION_HEADER> PEParser::GetAllSectionHeaders()
 {
     std::vector<IMAGE_SECTION_HEADER> sections;
 
-    IMAGE_NT_HEADERS *ntHeaders = GetNtHeaders();
+    IMAGE_NT_HEADERS *ntHeaders = GetNtHeadersRaw();
     if (!ntHeaders)
         return sections;
 
@@ -230,7 +259,7 @@ bool PEParser::ReplaceImage(BYTE *newData, size_t newSize)
 }
 BYTE *PEParser::RvaToVa(DWORD rva)
 {
-    PIMAGE_NT_HEADERS nt = GetNtHeaders();
+    PIMAGE_NT_HEADERS nt = GetNtHeadersRaw();
     if (!nt)
         return nullptr;
 
@@ -259,15 +288,29 @@ BYTE *PEParser::RvaToVa(DWORD rva)
 
 std::pair<std::string, std::string> PEParser::ResolveIAT(uint64_t addr)
 {
-    PIMAGE_NT_HEADERS nt = GetNtHeaders();
-    if (!nt)
-        return {"", ""};
+    bool is64 = IsPE64();
+    IMAGE_DATA_DIRECTORY importDir;
+    ULONGLONG imageBase;
 
-    IMAGE_DATA_DIRECTORY importDir = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
-    if (importDir.VirtualAddress == 0 || importDir.Size == 0)
+    if (is64)
     {
-        return {"", ""}; // No imports
+        PIMAGE_NT_HEADERS64 nt = GetNtHeaders64();
+        if (!nt)
+            return {"", ""};
+        importDir = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+        imageBase = nt->OptionalHeader.ImageBase;
     }
+    else
+    {
+        PIMAGE_NT_HEADERS32 nt = GetNtHeaders32();
+        if (!nt)
+            return {"", ""};
+        importDir = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+        imageBase = nt->OptionalHeader.ImageBase;
+    }
+
+    if (importDir.VirtualAddress == 0 || importDir.Size == 0)
+        return {"", ""};
 
     IMAGE_IMPORT_DESCRIPTOR *importDesc = (IMAGE_IMPORT_DESCRIPTOR *)RvaToVa(importDir.VirtualAddress);
     if (!importDesc)
@@ -277,37 +320,55 @@ std::pair<std::string, std::string> PEParser::ResolveIAT(uint64_t addr)
     {
         const char *dllName = (const char *)RvaToVa(importDesc->Name);
 
-        // Thunks: where the actual imported addresses are written
-        IMAGE_THUNK_DATA *origThunk = (IMAGE_THUNK_DATA *)RvaToVa(importDesc->OriginalFirstThunk);
-        IMAGE_THUNK_DATA *thunk = (IMAGE_THUNK_DATA *)RvaToVa(importDesc->FirstThunk);
-
-        if (!thunk)
+        if (is64)
         {
-            importDesc++;
-            continue;
-        }
-
-        for (; origThunk && thunk && origThunk->u1.AddressOfData; ++origThunk, ++thunk)
-        {
-            // Only handle imported-by-name (not ordinal)
-            if (origThunk->u1.Ordinal & IMAGE_ORDINAL_FLAG)
-                continue;
-
-            IMAGE_IMPORT_BY_NAME *importByName = (IMAGE_IMPORT_BY_NAME *)RvaToVa((DWORD)origThunk->u1.AddressOfData);
-            if (!importByName)
-                continue;
-
-            void *iatAddress = (void *)(uintptr_t)(nt->OptionalHeader.ImageBase + thunk->u1.Function);
-            if ((uint64_t)iatAddress == addr)
+            IMAGE_THUNK_DATA64 *origThunk = (IMAGE_THUNK_DATA64 *)RvaToVa(importDesc->OriginalFirstThunk);
+            IMAGE_THUNK_DATA64 *thunk = (IMAGE_THUNK_DATA64 *)RvaToVa(importDesc->FirstThunk);
+            if (!thunk)
             {
-                return {std::string(dllName), std::string((char *)importByName->Name)};
+                importDesc++;
+                continue;
+            }
+
+            for (; origThunk && thunk && origThunk->u1.AddressOfData; ++origThunk, ++thunk)
+            {
+                if (origThunk->u1.Ordinal & IMAGE_ORDINAL_FLAG64)
+                    continue;
+                IMAGE_IMPORT_BY_NAME *ibn = (IMAGE_IMPORT_BY_NAME *)RvaToVa((DWORD)origThunk->u1.AddressOfData);
+                if (!ibn)
+                    continue;
+                uint64_t iatAddress = imageBase + thunk->u1.Function;
+                if (iatAddress == addr)
+                    return {std::string(dllName), std::string((char *)ibn->Name)};
+            }
+        }
+        else
+        {
+            IMAGE_THUNK_DATA32 *origThunk = (IMAGE_THUNK_DATA32 *)RvaToVa(importDesc->OriginalFirstThunk);
+            IMAGE_THUNK_DATA32 *thunk = (IMAGE_THUNK_DATA32 *)RvaToVa(importDesc->FirstThunk);
+            if (!thunk)
+            {
+                importDesc++;
+                continue;
+            }
+
+            for (; origThunk && thunk && origThunk->u1.AddressOfData; ++origThunk, ++thunk)
+            {
+                if (origThunk->u1.Ordinal & IMAGE_ORDINAL_FLAG32)
+                    continue;
+                IMAGE_IMPORT_BY_NAME *ibn = (IMAGE_IMPORT_BY_NAME *)RvaToVa(origThunk->u1.AddressOfData);
+                if (!ibn)
+                    continue;
+                uint64_t iatAddress = imageBase + thunk->u1.Function;
+                if (iatAddress == addr)
+                    return {std::string(dllName), std::string((char *)ibn->Name)};
             }
         }
 
         importDesc++;
     }
 
-    return {"", ""}; // Not found
+    return {"", ""};
 }
 
 std::string &PEParser::GetFilePath()
@@ -394,12 +455,20 @@ bool PEParser::LoadF(const std::string &filepath)
 
 DWORD PEParser::GetOEP()
 {
-    DWORD addressofentrypoint = GetNtHeaders()->OptionalHeader.AddressOfEntryPoint;
+    DWORD addressofentrypoint = GetNtHeadersRaw()->OptionalHeader.AddressOfEntryPoint;
     return (!addressofentrypoint) ? 0 : addressofentrypoint;
 }
 
-DWORD PEParser::GetImageBase()
+ULONGLONG PEParser::GetImageBase()
 {
-    DWORD imgBase = GetNtHeaders()->OptionalHeader.ImageBase;
-    return (!imgBase) ? 0 : imgBase;
+    if (IsPE64())
+    {
+        PIMAGE_NT_HEADERS64 nt64 = GetNtHeaders64();
+        return nt64 ? nt64->OptionalHeader.ImageBase : 0;
+    }
+    else
+    {
+        PIMAGE_NT_HEADERS32 nt32 = GetNtHeaders32();
+        return nt32 ? nt32->OptionalHeader.ImageBase : 0;
+    }
 }
