@@ -71,8 +71,10 @@ bool Analyzer::AnalyzeDump(const std::string& filePath) {
                 printf("[*] Section: %s | Size: 0x%X\n", sec.Name, sec.SizeOfRawData);
             }
             Logger::Log("[+] Static analysis complete.");
+            return true;
         } else {
             Logger::Log("[-] Failed to parse PE for analysis.");
+            return false;
         }
     } else {
         Logger::Log("[*] Dump is not a valid PE. Treating as raw shellcode.");

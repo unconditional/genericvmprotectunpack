@@ -103,7 +103,7 @@ bool VMPDebugger::Run(const std::string &exePath)
     }
 
     // Find .text section RVA
-    IMAGE_SECTION_HEADER *secs = IMAGE_FIRST_SECTION(nt);
+    IMAGE_SECTION_HEADER *secs = IMAGE_FIRST_SECTION(nt_generic);
     DWORD textRVA = 0x1000;
     for (int i = 0; i < numberOfSections; ++i)
     {

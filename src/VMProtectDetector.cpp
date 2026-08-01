@@ -86,11 +86,13 @@ bool VMProtectDetector::CheckSectionEntropy() {
 
 bool VMProtectDetector::Detect(PEParser& parser, std::string& reason) {
     Logger::Log("[*] Starting VMProtectDetector::Detect...", LogLevel::INFO);
+
     VMProtectDetector detector(&parser);
     bool result = detector.IsVMProtectPresent();
     if (result) {
         reason = detector.GetDetectionReason();
         Logger::Log(Utils::Format("[+] VMProtect detected: %s", reason.c_str()), LogLevel::INFO);
-        return result;
     }
+
+    return result;
 }

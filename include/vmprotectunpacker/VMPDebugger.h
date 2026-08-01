@@ -2,6 +2,7 @@
 
 #include <Windows.h>
 #include <string>
+#include <capstone/capstone.h>
 
 class VMPDebugger {
 public:
@@ -20,6 +21,6 @@ private:
 
     // Helper to dump memory to a file
     bool DumpProcessImage(HANDLE hProcess, LPVOID base, SIZE_T size, const std::string& outFile);
-    bool Disassemble(LPVOID address, size_t size = 32, cs_mode mode);
+    bool Disassemble(LPVOID address, size_t size, cs_mode mode);
 
 };

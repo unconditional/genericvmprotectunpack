@@ -130,12 +130,12 @@ bool Devirtualizer::Devirtualize(PEParser* parser, const BYTE* region, size_t re
         }
 
         cs_free(insn, count);
-    }
-    else {
-        Logger::Log("[-] Failed to disassemble VM region.", LogLevel::Error);
         cs_close(&handle);
-        return false;
+
+        return true;
     }
 
+    Logger::Log("[-] Failed to disassemble VM region.", LogLevel::Error);
     cs_close(&handle);
+    return false;
 }
