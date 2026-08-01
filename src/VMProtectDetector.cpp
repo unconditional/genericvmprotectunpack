@@ -15,12 +15,53 @@ bool VMProtectDetector::IsVMProtectPresent()
         return true;
     if (CheckEntryPointLocation())
         return true;
+    if (CheckGhostSections())
+        return true;
     return false;
 }
 
 std::string VMProtectDetector::GetDetectionReason()
 {
     return detectionReason;
+}
+
+double VMProtectDetector::ComputeEntropy(const IMAGE_SECTION_HEADER *sec)
+{
+    BYTE *image = parser->GetMappedImage();
+    if (!image || !sec)
+        return 0.0;
+
+    DWORD offset, size;
+    if (parser->IsSuspendedDump())
+    {
+        // Memory dump: byte offset in buffer == RVA (VirtualAddress-based)
+        offset = sec->VirtualAddress;
+        size = sec->Misc.VirtualSize;
+    }
+    else
+    {
+        // On-disk file: use raw/file-aligned layout
+        offset = sec->PointerToRawData;
+        size = sec->SizeOfRawData;
+    }
+
+    if (size == 0 || offset + size > parser->GetImageSize())
+        return 0.0;
+
+    BYTE *sectionData = image + offset;
+
+    std::map<BYTE, int> freq;
+    for (DWORD i = 0; i < size; ++i)
+        freq[sectionData[i]]++;
+
+    double entropy = 0.0;
+    for (const auto &pair : freq)
+    {
+        double p = (double)pair.second / size;
+        entropy -= p * std::log2(p);
+    }
+
+    return entropy;
 }
 
 bool VMProtectDetector::CheckVMProtectSignature()
@@ -77,29 +118,46 @@ bool VMProtectDetector::CheckSectionEntropy()
     if (!sec)
         return false;
 
-    BYTE *image = parser->GetMappedImage();
-    if (!image)
-        return false;
-
-    DWORD offset = parser->IsSuspendedDump() ? sec->VirtualAddress : sec->PointerToRawData;
-    DWORD size = parser->IsSuspendedDump() ? sec->Misc.VirtualSize : sec->SizeOfRawData;
-
-    BYTE *sectionData = image + offset;
-
-    std::map<BYTE, int> freq;
-    for (DWORD i = 0; i < size; ++i)
-        freq[sectionData[i]]++;
-
-    double entropy = 0.0;
-    for (const auto &pair : freq)
-    {
-        double p = (double)pair.second / size;
-        entropy -= p * std::log2(p);
-    }
+    double entropy = ComputeEntropy(sec);
 
     if (entropy > 7.5)
     {
         detectionReason = "High entropy in .text section (Possible VMProtect)";
+        return true;
+    }
+    return false;
+}
+
+bool VMProtectDetector::CheckGhostSections()
+{
+    auto sections = parser->GetAllSectionHeaders();
+    bool hasGhostSection = false;
+    bool hasHighEntropyPayload = false;
+
+    for (auto &sec : sections)
+    {
+        bool isCodeExec = (sec.Characteristics & IMAGE_SCN_CNT_CODE) &&
+                          (sec.Characteristics & IMAGE_SCN_MEM_EXECUTE);
+
+        // Ghost section: no raw data on disk but a large runtime footprint —
+        // typical of a protector's "unpack target" section.
+        bool isGhost = (sec.SizeOfRawData == 0 && sec.Misc.VirtualSize > 0x10000);
+        if (isGhost && isCodeExec)
+            hasGhostSection = true;
+
+        // Payload section: large, executable, and near-maximum entropy —
+        // typical of an encrypted/compressed VM bytecode blob.
+        if (isCodeExec && sec.SizeOfRawData > 1000000)
+        {
+            double entropy = ComputeEntropy(&sec);
+            if (entropy > 7.5)
+                hasHighEntropyPayload = true;
+        }
+    }
+
+    if (hasGhostSection && hasHighEntropyPayload)
+    {
+        detectionReason = "Ghost code section + high-entropy payload section (VM-protector pattern)";
         return true;
     }
     return false;
