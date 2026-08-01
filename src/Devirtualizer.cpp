@@ -4,8 +4,7 @@
 #include <fstream>
 #include <windows.h>
 #include "vmprotectunpacker/Utils.h"
-
-
+#include "vmprotectunpacker/PEParser.h"
 
 std::unordered_map<uint64_t, Devirtualizer::HandlerEntry> Devirtualizer::handlerMap;
 
@@ -51,7 +50,6 @@ bool Devirtualizer::DevirtualizeToFile(const std::string& outPath) {
 }
 
 bool Devirtualizer::Devirtualize(PEParser* parser, const BYTE* region, size_t regionSize) {
-
     csh handle;
     cs_insn* insn;
     size_t count;
@@ -61,15 +59,20 @@ bool Devirtualizer::Devirtualize(PEParser* parser, const BYTE* region, size_t re
     // Check PE Magic Number to detect 32-bit
     // Assuming 'pNtHeaders' is the pointer to IMAGE_NT_HEADERS
     // If you only have 'pDosHeader', define pNtHeaders = (PIMAGE_NT_HEADERS)((LPBYTE)pDosHeader + pDosHeader->e_lfanew);
+    PIMAGE_NT_HEADERS pNtHeaders = parser->GetNtHeaders();
+    if (!pNtHeaders) {
+        Logger::Log("[Error] [-] Failed to get NT Headers\n", LogLevel::Error);
+        return false;
+    }
     
     if (pNtHeaders->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR32_MAGIC) { // 0x10B
         mode = CS_MODE_32;
-        Log("[INFO] [+] Detected 32-bit PE (CS_MODE_32)\n");
+        Logger::Log("[INFO] [+] Detected 32-bit PE (CS_MODE_32)\n");
     } else if (pNtHeaders->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC) { // 0x20B
         mode = CS_MODE_64;
-        Log("[INFO] [+] Detected 64-bit PE (CS_MODE_64)\n");
+        Logger::Log("[INFO] [+] Detected 64-bit PE (CS_MODE_64)\n");
     } else {
-        Log("[Error] [-] Unknown PE Magic: 0x%X\n", pNtHeaders->OptionalHeader.Magic);
+        Logger::Log("[Error] [-] Unknown PE Magic: 0x%X\n", pNtHeaders->OptionalHeader.Magic);
         return false;
     }
     
@@ -114,7 +117,7 @@ bool Devirtualizer::Devirtualize(PEParser* parser, const BYTE* region, size_t re
                     handlerMap[entry.address] = entry;
 
                     Logger::Log(
-                        Utils::Format("[*] Handler found: VirtualOpcode=0x%02X at 0x%p → Handler=0x%p",
+                        Utils::Format("[*] Handler found: VirtualOpcode=0x%02X at 0x%p -> Handler=0x%p",
                             entry.vOpcode, entry.address, entry.target),
                         LogLevel::INFO
                     );
