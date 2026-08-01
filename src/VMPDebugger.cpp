@@ -253,7 +253,7 @@ bool VMPDebugger::Disassemble(LPVOID address, size_t size, cs_mode mode)
     if (err != CS_ERR_OK)
     {
         Logger::Log(
-            Utils::Format("[Error] [-] Capstone init failed. Error Code: %d (Mode: %d)", err, mode),
+            Utils::Format("[-] Capstone init failed. Error Code: %d (Mode: %d)", (int)err, (int)mode),
             LogLevel::Error);
         return false;
     }
