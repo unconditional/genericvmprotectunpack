@@ -80,7 +80,7 @@ bool Devirtualizer::Devirtualize(PEParser* parser, const BYTE* region, size_t re
     cs_err err = cs_open(arch, mode, &handle);
     if (err != CS_ERR_OK) {
         // Print the specific error code to debug further issues
-        Log("[Error] [-] Capstone init failed. Error Code: %d (Mode: %d)\n", err, mode);
+        Logger::Log("[Error] [-] Capstone init failed. Error Code: %d (Mode: %d)\n", err, mode);
         return false;
     }
 
