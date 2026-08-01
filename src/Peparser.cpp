@@ -133,6 +133,65 @@ bool PEParser::Load(const std::string &filepath)
     return true;
 }
 
+bool PEParser::LoadF(const std::string &filepath, bool isMemoryLayout)
+{
+    filePath = filepath;
+
+    hFile = CreateFileA(filepath.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL,
+                        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+
+    if (hFile == INVALID_HANDLE_VALUE)
+    {
+        Logger::Log("[-] Failed to open file: " + filepath, LogLevel::Error);
+        return false;
+    }
+
+    WORD signature = 0;
+    DWORD bytesRead = 0;
+    BOOL readOk = ReadFile(hFile, &signature, sizeof(WORD), &bytesRead, NULL);
+
+    if (!readOk || signature != IMAGE_DOS_SIGNATURE)
+    {
+        Logger::Log("[-] File is not a valid PE (missing MZ header): " + filepath, LogLevel::Error);
+        CloseHandle(hFile);
+        return false;
+    }
+
+    SetFilePointer(hFile, 0, NULL, FILE_BEGIN);
+
+    imageSize = GetFileSize(hFile, NULL);
+    if (imageSize == INVALID_FILE_SIZE || imageSize == 0)
+    {
+        Logger::Log("[-] Failed to get file size.", LogLevel::Error);
+        CloseHandle(hFile);
+        return false;
+    }
+
+    // Read into a heap buffer so callers can modify headers in-place.
+    mappedImage = new BYTE[imageSize];
+    DWORD bytesRead2 = 0;
+    SetFilePointer(hFile, 0, NULL, FILE_BEGIN);
+    if (!ReadFile(hFile, mappedImage, (DWORD)imageSize, &bytesRead2, NULL) || bytesRead2 != imageSize)
+    {
+        Logger::Log("[-] Failed to read file into buffer.", LogLevel::Error);
+        delete[] mappedImage;
+        mappedImage = nullptr;
+        CloseHandle(hFile);
+        return false;
+    }
+
+    CloseHandle(hFile);
+    hFile = NULL;
+
+    this->isSuspendedDump = isMemoryLayout;
+
+    Logger::Log("[+] Successfully loaded PE file: " + filepath, LogLevel::INFO);
+
+    return true;
+}
+
+
+
 BYTE *PEParser::GetMappedImage()
 {
     return mappedImage;
@@ -401,59 +460,6 @@ bool PEParser::Save(const std::string &outputPath) const
     return outFile.good();
 }
 
-bool PEParser::LoadF(const std::string &filepath)
-{
-    filePath = filepath;
-
-    hFile = CreateFileA(filepath.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL,
-                        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-
-    if (hFile == INVALID_HANDLE_VALUE)
-    {
-        Logger::Log("[-] Failed to open file: " + filepath, LogLevel::Error);
-        return false;
-    }
-
-    WORD signature = 0;
-    DWORD bytesRead = 0;
-    BOOL readOk = ReadFile(hFile, &signature, sizeof(WORD), &bytesRead, NULL);
-
-    if (!readOk || signature != IMAGE_DOS_SIGNATURE)
-    {
-        Logger::Log("[-] File is not a valid PE (missing MZ header): " + filepath, LogLevel::Error);
-        CloseHandle(hFile);
-        return false;
-    }
-
-    SetFilePointer(hFile, 0, NULL, FILE_BEGIN);
-
-    imageSize = GetFileSize(hFile, NULL);
-    if (imageSize == INVALID_FILE_SIZE || imageSize == 0)
-    {
-        Logger::Log("[-] Failed to get file size.", LogLevel::Error);
-        CloseHandle(hFile);
-        return false;
-    }
-
-    // Read into a heap buffer so callers can modify headers in-place.
-    mappedImage = new BYTE[imageSize];
-    DWORD bytesRead2 = 0;
-    SetFilePointer(hFile, 0, NULL, FILE_BEGIN);
-    if (!ReadFile(hFile, mappedImage, (DWORD)imageSize, &bytesRead2, NULL) || bytesRead2 != imageSize)
-    {
-        Logger::Log("[-] Failed to read file into buffer.", LogLevel::Error);
-        delete[] mappedImage;
-        mappedImage = nullptr;
-        CloseHandle(hFile);
-        return false;
-    }
-
-    CloseHandle(hFile);
-    hFile = NULL;
-    Logger::Log("[+] Successfully loaded PE file: " + filepath, LogLevel::INFO);
-
-    return true;
-}
 
 DWORD PEParser::GetOEP()
 {
@@ -473,4 +479,21 @@ ULONGLONG PEParser::GetImageBase()
         PIMAGE_NT_HEADERS32 nt32 = GetNtHeaders32();
         return nt32 ? nt32->OptionalHeader.ImageBase : 0;
     }
+}
+
+PIMAGE_SECTION_HEADER PEParser::GetSectionContainingRVA(DWORD rva)
+{
+    PIMAGE_NT_HEADERS nt = GetNtHeadersRaw();
+    if (!nt)
+        return nullptr;
+
+    PIMAGE_SECTION_HEADER section = IMAGE_FIRST_SECTION(nt);
+    for (int i = 0; i < nt->FileHeader.NumberOfSections; ++i, ++section)
+    {
+        DWORD start = section->VirtualAddress;
+        DWORD end = start + max(section->Misc.VirtualSize, section->SizeOfRawData);
+        if (rva >= start && rva < end)
+            return section;
+    }
+    return nullptr;
 }

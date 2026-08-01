@@ -89,32 +89,23 @@ bool VMProtectDetector::CheckVMProtectSignature()
 
 bool VMProtectDetector::CheckEntryPointLocation()
 {
-    auto nt = parser->GetNtHeadersRaw();
-    if (!nt)
-        return false;
+    DWORD epRVA = parser->GetOEP();
+    auto sec = parser->GetSectionContainingRVA(epRVA);
 
-    // AddressOfEntryPoint sits before the 32/64 divergence point (BaseOfCode),
-    // so it's safe to read via the raw/generic header regardless of bitness.
-    DWORD epRVA = nt->OptionalHeader.AddressOfEntryPoint;
-
-    auto sec = parser->GetSectionHeader(".text");
-    if (sec)
+    // If no section owns the OEP RVA at all, that's itself a red flag —
+    // means the loader/protector placed code outside declared sections.
+    if (!sec)
     {
-        DWORD textStart = sec->VirtualAddress;
-        DWORD textEnd = textStart + sec->Misc.VirtualSize;
-
-        if (epRVA < textStart || epRVA > textEnd)
-        {
-            detectionReason = "Entry point outside .text section";
-            return true;
-        }
+        detectionReason = "Entry point not contained in any declared section";
+        return true;
     }
     return false;
 }
 
 bool VMProtectDetector::CheckSectionEntropy()
 {
-    auto sec = parser->GetSectionHeader(".text");
+    DWORD epRVA = parser->GetOEP();
+    auto sec = parser->GetSectionContainingRVA(epRVA);
     if (!sec)
         return false;
 
@@ -122,7 +113,7 @@ bool VMProtectDetector::CheckSectionEntropy()
 
     if (entropy > 7.5)
     {
-        detectionReason = "High entropy in .text section (Possible VMProtect)";
+        detectionReason = "High entropy in entry-point section (Possible VMProtect)";
         return true;
     }
     return false;

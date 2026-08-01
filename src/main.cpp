@@ -38,7 +38,7 @@ int main(int argc, char *argv[])
     PEParser parser;
     std::string dumpedFile = "unpacked_dump.bin";
 
-    if (!parser.LoadF(dumpedFile))
+    if (!parser.LoadF(dumpedFile, true))
     {
         Logger::Log("[-] Failed to load dumped PE. Trying shellcode disassembly...", LogLevel::Error);
 
