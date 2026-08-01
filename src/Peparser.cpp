@@ -190,8 +190,6 @@ bool PEParser::LoadF(const std::string &filepath, bool isMemoryLayout)
     return true;
 }
 
-
-
 BYTE *PEParser::GetMappedImage()
 {
     return mappedImage;
@@ -217,13 +215,16 @@ PIMAGE_NT_HEADERS PEParser::GetNtHeadersRaw()
 
 bool PEParser::IsPE64() const
 {
-    if (!mappedImage) return false;
+    if (!mappedImage)
+        return false;
 
     PIMAGE_DOS_HEADER dos = (PIMAGE_DOS_HEADER)mappedImage;
-    if (dos->e_magic != IMAGE_DOS_SIGNATURE) return false;
+    if (dos->e_magic != IMAGE_DOS_SIGNATURE)
+        return false;
 
     PIMAGE_NT_HEADERS nt = (PIMAGE_NT_HEADERS)(mappedImage + dos->e_lfanew);
-    if (nt->Signature != IMAGE_NT_SIGNATURE) return false;
+    if (nt->Signature != IMAGE_NT_SIGNATURE)
+        return false;
 
     return nt->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC;
 }
@@ -334,7 +335,7 @@ BYTE *PEParser::RvaToVa(DWORD rva)
             DWORD offset = rva - section->VirtualAddress;
             DWORD base;
             if (isSuspendedDump)
-                base = section->VirtualAddress;   // memory-dump: offset == RVA
+                base = section->VirtualAddress; // memory-dump: offset == RVA
             else
                 base = section->PointerToRawData ? section->PointerToRawData : section->VirtualAddress;
             return mappedImage + base + offset;
@@ -460,7 +461,6 @@ bool PEParser::Save(const std::string &outputPath) const
     return outFile.good();
 }
 
-
 DWORD PEParser::GetOEP()
 {
     DWORD addressofentrypoint = GetNtHeadersRaw()->OptionalHeader.AddressOfEntryPoint;
@@ -493,7 +493,9 @@ PIMAGE_SECTION_HEADER PEParser::GetSectionContainingRVA(DWORD rva)
         DWORD start = section->VirtualAddress;
         DWORD end = start + max(section->Misc.VirtualSize, section->SizeOfRawData);
         if (rva >= start && rva < end)
+        {
             return section;
+        }
     }
     return nullptr;
 }

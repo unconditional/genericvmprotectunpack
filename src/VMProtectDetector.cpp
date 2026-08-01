@@ -99,6 +99,8 @@ bool VMProtectDetector::CheckEntryPointLocation()
         detectionReason = "Entry point not contained in any declared section";
         return true;
     }
+
+    Logger::Log("[*] Section containing OEP RVA: " + sec->Name, LogLevel::INFO);
     return false;
 }
 
@@ -110,6 +112,7 @@ bool VMProtectDetector::CheckSectionEntropy()
         return false;
 
     double entropy = ComputeEntropy(sec);
+    Logger::Log("[*] Section containing OEP RVA: " + sec->Name + " has entropy: "  + entropy);
 
     if (entropy > 7.5)
     {
@@ -125,26 +128,40 @@ bool VMProtectDetector::CheckGhostSections()
     bool hasGhostSection = false;
     bool hasHighEntropyPayload = false;
 
+    Logger::Log(Utils::Format("[DEBUG] IsSuspendedDump=%d, ImageSize=%zu",
+        parser->IsSuspendedDump(), parser->GetImageSize()), LogLevel::INFO);
+
     for (auto &sec : sections)
     {
+        std::string name = SectionName(&sec);
         bool isCodeExec = (sec.Characteristics & IMAGE_SCN_CNT_CODE) &&
-                          (sec.Characteristics & IMAGE_SCN_MEM_EXECUTE);
-
-        // Ghost section: no raw data on disk but a large runtime footprint —
-        // typical of a protector's "unpack target" section.
+                           (sec.Characteristics & IMAGE_SCN_MEM_EXECUTE);
         bool isGhost = (sec.SizeOfRawData == 0 && sec.Misc.VirtualSize > 0x10000);
+
+        double entropy = 0.0;
+        bool entropyChecked = false;
+        if (isCodeExec && sec.SizeOfRawData > 1000000)
+        {
+            entropy = ComputeEntropy(&sec);
+            entropyChecked = true;
+        }
+
+        Logger::Log(Utils::Format(
+            "[DEBUG] Section=%-8s Characteristics=0x%08X isCodeExec=%d RawSize=%u VirtSize=%u VA=0x%X isGhost=%d entropy=%.3f (%s)",
+            name.c_str(), sec.Characteristics, isCodeExec, sec.SizeOfRawData,
+            sec.Misc.VirtualSize, sec.VirtualAddress, isGhost, entropy,
+            entropyChecked ? "computed" : "skipped"),
+            LogLevel::INFO);
+
         if (isGhost && isCodeExec)
             hasGhostSection = true;
 
-        // Payload section: large, executable, and near-maximum entropy —
-        // typical of an encrypted/compressed VM bytecode blob.
-        if (isCodeExec && sec.SizeOfRawData > 1000000)
-        {
-            double entropy = ComputeEntropy(&sec);
-            if (entropy > 7.5)
-                hasHighEntropyPayload = true;
-        }
+        if (entropyChecked && entropy > 7.5)
+            hasHighEntropyPayload = true;
     }
+
+    Logger::Log(Utils::Format("[DEBUG] hasGhostSection=%d hasHighEntropyPayload=%d",
+        hasGhostSection, hasHighEntropyPayload), LogLevel::INFO);
 
     if (hasGhostSection && hasHighEntropyPayload)
     {
