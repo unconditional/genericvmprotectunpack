@@ -100,7 +100,7 @@ bool VMProtectDetector::CheckEntryPointLocation()
         return true;
     }
 
-    std::string secName = parser->SectionName(&sec);
+    std::string secName = parser->SectionName(sec);
     Logger::Log(Utils::Format("[*] Section containing OEP RVA:: %s", secName.c_str()), LogLevel::INFO);
 
     return false;
@@ -114,7 +114,7 @@ bool VMProtectDetector::CheckSectionEntropy()
         return false;
 
     double entropy = ComputeEntropy(sec);
-    std::string secName = parser->SectionName(&sec);
+    std::string secName = parser->SectionName(sec);
     Logger::Log(Utils::Format("[*] Section containing OEP RVA: %s has entropy: %f)", secName.c_str(), entropy), LogLevel::INFO);
 
     if (entropy > 7.5)
