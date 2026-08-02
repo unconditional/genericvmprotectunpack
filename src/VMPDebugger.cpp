@@ -47,6 +47,62 @@ static void SuspendAllThreads(DWORD pid)
     CloseHandle(hSnap);
 }
 
+DWORD VMPDebugger::FindRealOEP(HANDLE hProcess, LPVOID imageBase, DWORD codeRVA, DWORD codeSize, bool is64)
+{
+    if (codeSize == 0) codeSize = 0x00100000;
+    std::vector<BYTE> codeBuf(codeSize);
+    SIZE_T bytesRead = 0;
+
+    if (!ReadProcessMemory(hProcess, (BYTE *)imageBase + codeRVA, codeBuf.data(), codeSize, &bytesRead) || bytesRead < 16)
+    {
+        Logger::Log("[-] Failed to read code section memory for OEP scanning.", LogLevel::WARNING);
+        return codeRVA;
+    }
+
+    // 1. Scan for Delphi / standard x86 prologue: 55 8B EC (push ebp; mov ebp, esp)
+    for (size_t i = 0; i < bytesRead - 8; ++i)
+    {
+        if (codeBuf[i] == 0x55 && codeBuf[i + 1] == 0x8B && codeBuf[i + 2] == 0xEC)
+        {
+            BYTE b3 = codeBuf[i + 3];
+            // Delphi / C++ function prologues: add esp (-XX), push ebx, mov eax, push esi, push edi
+            if (b3 == 0x83 || b3 == 0x53 || b3 == 0xB8 || b3 == 0x56 || b3 == 0x57 || b3 == 0xA1)
+            {
+                DWORD foundOEP = codeRVA + static_cast<DWORD>(i);
+                Logger::Log("[+] Detected real OEP pattern (55 8B EC) at RVA: " + ToHex((uintptr_t)foundOEP));
+                return foundOEP;
+            }
+        }
+    }
+
+    // 2. Scan for x64 MSVC entry point pattern: 48 83 EC (sub rsp, imm8)
+    if (is64)
+    {
+        for (size_t i = 0; i < bytesRead - 8; ++i)
+        {
+            if (codeBuf[i] == 0x48 && codeBuf[i + 1] == 0x83 && codeBuf[i + 2] == 0xEC)
+            {
+                DWORD foundOEP = codeRVA + static_cast<DWORD>(i);
+                Logger::Log("[+] Detected real x64 OEP pattern (48 83 EC) at RVA: " + ToHex((uintptr_t)foundOEP));
+                return foundOEP;
+            }
+        }
+    }
+
+    // 3. Fallback: First non-zero code block
+    for (size_t i = 0; i < bytesRead - 4; ++i)
+    {
+        if (codeBuf[i] != 0x00 && codeBuf[i] != 0x90)
+        {
+            DWORD foundOEP = codeRVA + static_cast<DWORD>(i);
+            Logger::Log("[*] Fallback: Using first code block as OEP RVA: " + ToHex((uintptr_t)foundOEP));
+            return foundOEP;
+        }
+    }
+
+    return codeRVA;
+}
+
 bool VMPDebugger::Run(const std::string &exePath)
 {
     STARTUPINFOA si = {sizeof(si)};
@@ -76,7 +132,7 @@ bool VMPDebugger::Run(const std::string &exePath)
     auto *dos = (IMAGE_DOS_HEADER *)headers;
     auto *nt_generic = (IMAGE_NT_HEADERS32 *)((BYTE *)headers + dos->e_lfanew);
 
-    // --- PEB Anti-Debug Flag Scrubbing ---
+    // Patch PEB Anti-Debug Flags
     BYTE zeroByte = 0;
     DWORD zeroDword = 0;
     uintptr_t pebAddr = reinterpret_cast<uintptr_t>(pbi.PebBaseAddress);
@@ -116,29 +172,62 @@ bool VMPDebugger::Run(const std::string &exePath)
         numberOfSections = (int)nt64->FileHeader.NumberOfSections;
     }
 
-    // Find .text section RVA
+    // Dynamic code section discovery via stub section exclusion
     IMAGE_SECTION_HEADER *secs = IMAGE_FIRST_SECTION(nt_generic);
-    DWORD textRVA = 0x1000;
+    DWORD codeRVA = 0x1000;
+    DWORD codeSize = 0;
+    std::string codeSectionName = ".text";
+
+    // 1. Dynamically locate the protector stub section (the section owning the OEP RVA)
+    const IMAGE_SECTION_HEADER *stubSection = nullptr;
     for (int i = 0; i < numberOfSections; ++i)
     {
+        DWORD secStart = secs[i].VirtualAddress;
+        DWORD secSize = secs[i].Misc.VirtualSize ? secs[i].Misc.VirtualSize : secs[i].SizeOfRawData;
+        if (oepRVA >= secStart && oepRVA < secStart + secSize)
+        {
+            stubSection = &secs[i];
+            char stubName[9] = {};
+            memcpy(stubName, secs[i].Name, 8);
+            Logger::Log("[*] Identified protector stub section dynamically: " + std::string(stubName) +
+                        " (RVA: " + ToHex((uintptr_t)secStart) + ")", LogLevel::INFO);
+            break;
+        }
+    }
+
+    // 2. Select the main application payload code section (executable section distinct from the stub)
+    for (int i = 0; i < numberOfSections; ++i)
+    {
+        // Skip the protector stub section
+        if (&secs[i] == stubSection)
+            continue;
+
         char name[9] = {};
         memcpy(name, secs[i].Name, 8);
-        if (strcmp(name, ".text") == 0)
+        std::string sName(name);
+
+        bool isExecutableCode = (secs[i].Characteristics & IMAGE_SCN_CNT_CODE) ||
+                               (secs[i].Characteristics & IMAGE_SCN_MEM_EXECUTE) ||
+                               (sName == "CODE" || sName == ".text");
+
+        if (isExecutableCode)
         {
-            textRVA = secs[i].VirtualAddress;
+            codeRVA = secs[i].VirtualAddress;
+            codeSize = secs[i].Misc.VirtualSize ? secs[i].Misc.VirtualSize : secs[i].SizeOfRawData;
+            codeSectionName = sName;
             break;
         }
     }
 
     Logger::Log("[+] ImageBase: " + ToHex((uintptr_t)imageBase));
-    Logger::Log("[+] OEP RVA:   " + ToHex((uintptr_t)oepRVA));
-    Logger::Log("[+] .text RVA: " + ToHex((uintptr_t)textRVA));
+    Logger::Log("[+] Stub OEP RVA: " + ToHex((uintptr_t)oepRVA));
+    Logger::Log("[+] Target Code Section (" + codeSectionName + ") RVA: " + ToHex((uintptr_t)codeRVA));
 
     ResumeThread(pi.hThread);
-    Logger::Log("[+] Process resumed - polling .text for VMP stub writes (max 30s)...");
+    Logger::Log("[+] Process resumed - polling code section for VMP stub writes (max 30s)...");
 
     bool dumpDone = false;
-    const int MAX_POLLS = 3000; // 30 seconds
+    const int MAX_POLLS = 3000;
 
     for (int poll = 0; poll < MAX_POLLS; ++poll)
     {
@@ -148,9 +237,9 @@ bool VMPDebugger::Run(const std::string &exePath)
         GetExitCodeProcess(pi.hProcess, &exitCode);
         bool dead = (exitCode != STILL_ACTIVE);
 
-        if (TextSectionPopulated(pi.hProcess, imageBase, textRVA, 256))
+        if (TextSectionPopulated(pi.hProcess, imageBase, codeRVA, 256))
         {
-            Logger::Log("[+] .text populated after ~" + std::to_string(poll * 10) + "ms");
+            Logger::Log("[+] Code section populated after ~" + std::to_string(poll * 10) + "ms");
 
             if (!dead)
             {
@@ -182,6 +271,10 @@ bool VMPDebugger::Run(const std::string &exePath)
             }
 
             dumpDone = DumpProcessImage(pi.hProcess, imageBase, finalSize, "unpacked_dump.bin");
+
+            // Scan process memory for real OEP
+            realOEP = FindRealOEP(pi.hProcess, imageBase, codeRVA, codeSize, (capstoneMode == CS_MODE_64));
+
             if (!dead)
                 TerminateProcess(pi.hProcess, 0);
             break;
@@ -190,19 +283,19 @@ bool VMPDebugger::Run(const std::string &exePath)
         if (dead)
         {
             Logger::Log("[!] Process exited (" + ToHex((uintptr_t)exitCode) +
-                        ") before .text was populated — VMP killed itself pre-initialization.");
-            // Last-chance dump even if .text is zero
+                        ") before code section was populated — VMP killed itself pre-initialization.");
             dumpDone = DumpProcessImage(pi.hProcess, imageBase, imgSize, "unpacked_dump.bin");
             break;
         }
     }
 
-    if (!dumpDone && !TextSectionPopulated(pi.hProcess, imageBase, textRVA, 32))
-        Logger::Log("[-] Poll timed out or .text never populated.", LogLevel::Error);
+    if (!dumpDone && !TextSectionPopulated(pi.hProcess, imageBase, codeRVA, 32))
+        Logger::Log("[-] Poll timed out or code section never populated.", LogLevel::Error);
 
     // Disassemble OEP from live/terminated process for diagnostics
     processHandle = pi.hProcess;
-    Disassemble(oepVA, 0x40, capstoneMode);
+    LPVOID realOEP_VA = (BYTE *)imageBase + (realOEP ? realOEP : oepRVA);
+    Disassemble(realOEP_VA, 0x40, capstoneMode);
 
     processHandle = pi.hProcess;
     threadHandle = pi.hThread;

@@ -1,26 +1,22 @@
 #pragma once
 
-#include <Windows.h>
+#include <windows.h>
 #include <string>
 #include <capstone/capstone.h>
 
 class VMPDebugger {
 public:
-    VMPDebugger() = default;
-
-    // Launches and debugs the VMProtect-packed binary
-    bool Run(const std::string& exePath);
-
-    // Optional: Access to internal handles
-    HANDLE GetProcessHandle() const { return processHandle; }
-    HANDLE GetThreadHandle() const { return threadHandle; }
+    VMPDebugger() : processHandle(NULL), threadHandle(NULL), realOEP(0) {}
+    bool Run(const std::string &exePath);
+    bool DumpProcessImage(HANDLE hProcess, LPVOID baseAddress, SIZE_T imageSize, const std::string &dumpPath);
+    bool Disassemble(LPVOID address, size_t size, cs_mode mode);
+    DWORD GetDetectedOEP() const { return realOEP; }
 
 private:
-    HANDLE processHandle = nullptr;
-    HANDLE threadHandle = nullptr;
+    DWORD FindRealOEP(HANDLE hProcess, LPVOID imageBase, DWORD codeRVA, DWORD codeSize, bool is64);
 
-    // Helper to dump memory to a file
-    bool DumpProcessImage(HANDLE hProcess, LPVOID base, SIZE_T size, const std::string& outFile);
-    bool Disassemble(LPVOID address, size_t size, cs_mode mode);
-
+private:
+    HANDLE processHandle;
+    HANDLE threadHandle;
+    DWORD realOEP;
 };

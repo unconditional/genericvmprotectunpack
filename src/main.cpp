@@ -57,6 +57,16 @@ int main(int argc, char *argv[])
         return 0;
     }
 
+
+    // Patch PE Header AddressOfEntryPoint with detected real OEP
+    DWORD realOEP = debugger.GetDetectedOEP();
+    if (realOEP != 0)
+    {
+        parser.SetOEP(realOEP);
+        Logger::Log(Utils::Format("[+] Patched PE Header AddressOfEntryPoint to Real OEP RVA: 0x%08X", realOEP), LogLevel::INFO);
+    }
+
+
     std::string reason;
     if (!VMProtectDetector::Detect(parser, reason))
     {

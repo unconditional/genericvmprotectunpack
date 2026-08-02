@@ -479,6 +479,26 @@ DWORD PEParser::GetOEP()
     return (!addressofentrypoint) ? 0 : addressofentrypoint;
 }
 
+void PEParser::SetOEP(DWORD newOepRVA)
+{
+    PIMAGE_NT_HEADERS nt = GetNtHeadersRaw();
+    if (!nt)
+        return;
+
+    if (IsPE64())
+    {
+        PIMAGE_NT_HEADERS64 nt64 = GetNtHeaders64();
+        if (nt64)
+            nt64->OptionalHeader.AddressOfEntryPoint = newOepRVA;
+    }
+    else
+    {
+        PIMAGE_NT_HEADERS32 nt32 = GetNtHeaders32();
+        if (nt32)
+            nt32->OptionalHeader.AddressOfEntryPoint = newOepRVA;
+    }
+}
+
 ULONGLONG PEParser::GetImageBase()
 {
     if (IsPE64())

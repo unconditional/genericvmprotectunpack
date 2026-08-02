@@ -26,6 +26,7 @@ public:
     std::string& GetFilePath();
     bool Save(const std::string& outputPath) const;
     DWORD GetOEP();
+    void SetOEP(DWORD newOepRVA);
     void SetFilePath(std::string& outPath);
     bool IsSuspendedDump() const { return isSuspendedDump; }
     PIMAGE_SECTION_HEADER GetSectionContainingRVA(DWORD rva);
