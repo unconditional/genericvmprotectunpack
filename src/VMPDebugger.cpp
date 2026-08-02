@@ -70,6 +70,23 @@ bool VMPDebugger::Run(const std::string &exePath)
     PVOID imageBase = nullptr;
     ReadProcessMemory(pi.hProcess, (BYTE *)pbi.PebBaseAddress + 0x10, &imageBase, sizeof(PVOID), nullptr);
 
+
+    // Patch PEB to mask debugging flags from VMProtect checks
+    BYTE zeroByte = 0;
+    DWORD zeroDword = 0;
+    uintptr_t pebAddr = reinterpret_cast<uintptr_t>(pbi.PebBaseAddress);
+
+    // 1. Clear BeingDebugged flag (PEB + 0x02)
+    WriteProcessMemory(pi.hProcess, reinterpret_cast<LPVOID>(pebAddr + 2), &zeroByte, sizeof(zeroByte), nullptr);
+
+    // 2. Clear NtGlobalFlag (PEB + 0xBC on x64, PEB + 0x68 on x86)
+    BOOL isTarget64 = (nt_generic->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC);
+    uintptr_t ntGlobalFlagOffset = pebAddr + (isTarget64 ? 0xBC : 0x68);
+    WriteProcessMemory(pi.hProcess, reinterpret_cast<LPVOID>(ntGlobalFlagOffset), &zeroDword, sizeof(zeroDword), nullptr);
+
+    Logger::Log("[+] Patched PEB: BeingDebugged and NtGlobalFlag successfully cleared.");
+
+
     BYTE headers[0x1000] = {};
     ReadProcessMemory(pi.hProcess, imageBase, headers, sizeof(headers), nullptr);
 
@@ -119,6 +136,25 @@ bool VMPDebugger::Run(const std::string &exePath)
     Logger::Log("[+] ImageBase: 0x" + ToHex((uintptr_t)imageBase));
     Logger::Log("[+] OEP RVA:   0x" + ToHex((uintptr_t)oepRVA));
     Logger::Log("[+] .text RVA: 0x" + ToHex((uintptr_t)textRVA));
+
+
+    // Set Hardware Breakpoint (DR0) at OEP to bypass software breakpoint detection
+    CONTEXT ctx = { 0 };
+    ctx.ContextFlags = CONTEXT_DEBUG_REGISTERS;
+    if (GetThreadContext(pi.hThread, &ctx)) {
+        ctx.Dr0 = (DWORD_PTR)oepVA;
+        // Bit 0 = enable local DR0 breakpoint
+        ctx.Dr7 |= (1 << 0);
+        // Bits 16-17 = 00 (Break on execution only)
+        ctx.Dr7 &= ~((1 << 16) | (1 << 17));
+
+        if (SetThreadContext(pi.hThread, &ctx)) {
+            Logger::Log("[+] Set Hardware Breakpoint (DR0) at OEP VA: 0x" + ToHex((uintptr_t)oepVA));
+        } else {
+            Logger::Log("[-] Failed to set Hardware Breakpoint.", LogLevel::WARNING);
+        }
+    }
+
 
     ResumeThread(pi.hThread);
     Logger::Log("[+] Process resumed - polling .text for VMP stub writes (max 30s)...");

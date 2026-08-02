@@ -110,12 +110,17 @@ int main(int argc, char *argv[])
             }
 
             PIMAGE_SECTION_HEADER sec = IMAGE_FIRST_SECTION(nt);
+            DWORD fileAlignment = parser.IsPE64() ?
+                parser.GetNtHeaders64()->OptionalHeader.FileAlignment :
+                parser.GetNtHeaders32()->OptionalHeader.FileAlignment;
+
             for (int i = 0; i < nt->FileHeader.NumberOfSections; ++i, ++sec)
             {
                 if (sec->Misc.VirtualSize != 0)
                 {
                     sec->PointerToRawData = sec->VirtualAddress;
-                    sec->SizeOfRawData = sec->Misc.VirtualSize;
+                    // Properly align SizeOfRawData using FileAlignment to avoid PE loader corruption
+                    sec->SizeOfRawData = (sec->Misc.VirtualSize + fileAlignment - 1) & ~(fileAlignment - 1);
                 }
             }
         }

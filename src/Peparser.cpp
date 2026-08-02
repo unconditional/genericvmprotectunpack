@@ -74,18 +74,29 @@ bool PEParser::Load(const std::string &filepath)
 
     PVOID pebAddress = pbi.PebBaseAddress;
     PVOID imageBaseAddr = nullptr;
-
     SIZE_T bytesRead = 0;
-    if (!ReadProcessMemory(
-            pi.hProcess,
-            (BYTE *)pebAddress + 0x10, // Offset to ImageBaseAddress
-            &imageBaseAddr,
-            sizeof(imageBaseAddr),
-            &bytesRead))
-    {
-        Logger::Log("[-] Failed to read ImageBaseAddress from PEB.", LogLevel::Error);
-        TerminateProcess(pi.hProcess, 0);
-        return false;
+
+    // Detect target WoW64 status (32-bit process on 64-bit Windows)
+    BOOL isWow64 = FALSE;
+    IsWow64Process(pi.hProcess, &isWow64);
+
+    // Offset of ImageBaseAddress in 32-bit PEB is 0x08; in 64-bit PEB it is 0x10
+    DWORD imageBaseOffset = isWow64 ? 0x08 : 0x10;
+
+    if (isWow64) {
+        DWORD imageBase32 = 0;
+        if (!ReadProcessMemory(pi.hProcess, (BYTE *)pebAddress + imageBaseOffset, &imageBase32, sizeof(imageBase32), &bytesRead)) {
+            Logger::Log("[-] Failed to read 32-bit ImageBaseAddress from PEB.", LogLevel::Error);
+            TerminateProcess(pi.hProcess, 0);
+            return false;
+        }
+        imageBaseAddr = reinterpret_cast<PVOID>(static_cast<uintptr_t>(imageBase32));
+    } else {
+        if (!ReadProcessMemory(pi.hProcess, (BYTE *)pebAddress + imageBaseOffset, &imageBaseAddr, sizeof(imageBaseAddr), &bytesRead)) {
+            Logger::Log("[-] Failed to read 64-bit ImageBaseAddress from PEB.", LogLevel::Error);
+            TerminateProcess(pi.hProcess, 0);
+            return false;
+        }
     }
 
     BYTE dosHeader[0x1000] = {};
