@@ -14,9 +14,15 @@
 #include "vmprotectunpacker/VMPDebugger.h"
 #include "vmprotectunpacker/Analyzer.h"
 
+#ifndef GIT_COMMIT_HASH
+    #define GIT_COMMIT_HASH "unknown"
+#endif
+
 
 int main(int argc, char *argv[])
 {
+    Logger::Log(Utils::Format("[*] VMProtect Unpacker Version (Git Commit): %s", GIT_COMMIT_HASH), LogLevel::INFO);
+
     if (argc < 2)
     {
         std::cout << "Usage: unpacker.exe <malware.exe>" << std::endl;
