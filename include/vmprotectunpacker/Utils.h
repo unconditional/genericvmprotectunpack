@@ -221,24 +221,37 @@ namespace Utils
 
         while (*fmt)
         {
-            if (*fmt == '%' && *(fmt + 1) != '\0')
+            if (*fmt == '%')
             {
-                const char specifier = *(fmt + 1);
+                const char *p = fmt + 1;
 
-                if (specifier == 's' ||
-                    specifier == 'd' ||
-                    specifier == 'i' ||
-                    specifier == 'u' ||
-                    specifier == 'x' ||
-                    specifier == 'X' ||
-                    specifier == 'p' ||
-                    specifier == 'f')
+                // Handle literal '%%'
+                if (*p == '%')
                 {
-                    WriteFormatValue(oss, specifier, value);
-
+                    oss << '%';
                     fmt += 2;
-                    oss << FormatImpl(fmt, args...);
-                    return oss.str();
+                    continue;
+                }
+
+                // Skip formatting flags, width, precision, and length modifiers
+                while (*p && (*p == '-' || *p == '+' || *p == ' ' || *p == '#' || *p == '0' ||
+                             (*p >= '1' && *p <= '9') || *p == '.' || *p == 'z' || *p == 'l' || *p == 'h'))
+                {
+                    p++;
+                }
+
+                if (*p != '\0')
+                {
+                    const char specifier = *p;
+                    if (specifier == 's' || specifier == 'd' || specifier == 'i' ||
+                        specifier == 'u' || specifier == 'x' || specifier == 'X' ||
+                        specifier == 'p' || specifier == 'f')
+                    {
+                        WriteFormatValue(oss, specifier, value);
+                        fmt = p + 1;
+                        oss << FormatImpl(fmt, args...);
+                        return oss.str();
+                    }
                 }
             }
 
