@@ -145,64 +145,97 @@ std::map<std::string, std::set<std::string>> ImportFixer::ScanForImports(PEParse
         return importMap;
 
     BYTE *base = parser.GetMappedImage();
+    size_t imgSize = parser.GetImageSize();
+
+    if (importDir.VirtualAddress >= imgSize)
+        return importMap;
+
     IMAGE_IMPORT_DESCRIPTOR *desc = (IMAGE_IMPORT_DESCRIPTOR *)(base + importDir.VirtualAddress);
 
-    while (desc->Name != 0)
+    while (desc->Name != 0 && desc->Name < imgSize)
     {
         const char *dllName = (const char *)(base + desc->Name);
-        DWORD thunkRva = desc->FirstThunk;
 
-        if (is64)
+        // Prefer OriginalFirstThunk (INT), fall back to FirstThunk (IAT)
+        DWORD thunkRva = desc->OriginalFirstThunk ? desc->OriginalFirstThunk : desc->FirstThunk;
+
+        if (thunkRva != 0 && thunkRva < imgSize)
         {
-            IMAGE_THUNK_DATA64 *thunk = (IMAGE_THUNK_DATA64 *)(base + thunkRva);
-            while (thunk && thunk->u1.AddressOfData != 0)
+            if (is64)
             {
-                uintptr_t va = static_cast<uintptr_t>(thunk->u1.Function);
-                auto res = ResolveVirtualAddressToAPI(va);
-                if (!res.first.empty() && !res.second.empty())
+                IMAGE_THUNK_DATA64 *thunk = (IMAGE_THUNK_DATA64 *)(base + thunkRva);
+                while (thunk && thunk->u1.AddressOfData != 0)
                 {
-                    importMap[res.first].insert(res.second);
-                }
-                else if (desc->Name != 0)
-                {
-                    // Fallback to name parsing if function is unmapped
-                    DWORD nameRva = static_cast<DWORD>(thunk->u1.AddressOfData);
-                    if (!(thunk->u1.Ordinal & IMAGE_ORDINAL_FLAG64) && nameRva < parser.GetImageSize())
+                    if (thunk->u1.Ordinal & IMAGE_ORDINAL_FLAG64)
                     {
-                        IMAGE_IMPORT_BY_NAME *ibn = (IMAGE_IMPORT_BY_NAME *)(base + nameRva);
-                        importMap[dllName].insert(std::string((char *)ibn->Name));
+                        WORD ord = (WORD)(thunk->u1.Ordinal & 0xFFFF);
+                        importMap[dllName].insert("Ordinal#" + std::to_string(ord));
                     }
+                    else
+                    {
+                        DWORD nameRva = static_cast<DWORD>(thunk->u1.AddressOfData);
+                        if (nameRva < imgSize)
+                        {
+                            IMAGE_IMPORT_BY_NAME *ibn = (IMAGE_IMPORT_BY_NAME *)(base + nameRva);
+                            if ((BYTE *)ibn->Name < base + imgSize)
+                            {
+                                importMap[dllName].insert(std::string((char *)ibn->Name));
+                            }
+                        }
+                        else
+                        {
+                            uintptr_t va = static_cast<uintptr_t>(thunk->u1.Function);
+                            auto res = ResolveVirtualAddressToAPI(va);
+                            if (!res.first.empty())
+                            {
+                                std::string funcName = res.second.empty() ? "UnknownAPI" : res.second;
+                                importMap[res.first].insert(funcName);
+                            }
+                        }
+                    }
+                    ++thunk;
                 }
-                ++thunk;
             }
-        }
-        else
-        {
-            IMAGE_THUNK_DATA32 *thunk = (IMAGE_THUNK_DATA32 *)(base + thunkRva);
-            while (thunk && thunk->u1.AddressOfData != 0)
+            else
             {
-                uintptr_t va = static_cast<uintptr_t>(thunk->u1.Function);
-                auto res = ResolveVirtualAddressToAPI(va);
-                if (!res.first.empty() && !res.second.empty())
+                IMAGE_THUNK_DATA32 *thunk = (IMAGE_THUNK_DATA32 *)(base + thunkRva);
+                while (thunk && thunk->u1.AddressOfData != 0)
                 {
-                    importMap[res.first].insert(res.second);
-                }
-                else if (desc->Name != 0)
-                {
-                    DWORD nameRva = thunk->u1.AddressOfData;
-                    if (!(thunk->u1.Ordinal & IMAGE_ORDINAL_FLAG32) && nameRva < parser.GetImageSize())
+                    if (thunk->u1.Ordinal & IMAGE_ORDINAL_FLAG32)
                     {
-                        IMAGE_IMPORT_BY_NAME *ibn = (IMAGE_IMPORT_BY_NAME *)(base + nameRva);
-                        importMap[dllName].insert(std::string((char *)ibn->Name));
+                        WORD ord = (WORD)(thunk->u1.Ordinal & 0xFFFF);
+                        importMap[dllName].insert("Ordinal#" + std::to_string(ord));
                     }
+                    else
+                    {
+                        DWORD nameRva = thunk->u1.AddressOfData;
+                        if (nameRva < imgSize)
+                        {
+                            IMAGE_IMPORT_BY_NAME *ibn = (IMAGE_IMPORT_BY_NAME *)(base + nameRva);
+                            if ((BYTE *)ibn->Name < base + imgSize)
+                            {
+                                importMap[dllName].insert(std::string((char *)ibn->Name));
+                            }
+                        }
+                        else
+                        {
+                            uintptr_t va = static_cast<uintptr_t>(thunk->u1.Function);
+                            auto res = ResolveVirtualAddressToAPI(va);
+                            if (!res.first.empty())
+                            {
+                                std::string funcName = res.second.empty() ? "UnknownAPI" : res.second;
+                                importMap[res.first].insert(funcName);
+                            }
+                        }
+                    }
+                    ++thunk;
                 }
-                ++thunk;
             }
         }
         ++desc;
     }
 
-    Logger::Log(Utils::Format("[*] Found %u import DLLs during dynamic scan.", (unsigned)importMap.size()), LogLevel::INFO);
+    Logger::Log(Utils::Format("[*] Found %u import DLLs during import table scan.", (unsigned)importMap.size()), LogLevel::INFO);
     return importMap;
 }
 
