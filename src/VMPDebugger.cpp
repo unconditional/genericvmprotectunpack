@@ -70,30 +70,29 @@ bool VMPDebugger::Run(const std::string &exePath)
     PVOID imageBase = nullptr;
     ReadProcessMemory(pi.hProcess, (BYTE *)pbi.PebBaseAddress + 0x10, &imageBase, sizeof(PVOID), nullptr);
 
-
-    // Patch PEB to mask debugging flags from VMProtect checks
-    BYTE zeroByte = 0;
-    DWORD zeroDword = 0;
-    uintptr_t pebAddr = reinterpret_cast<uintptr_t>(pbi.PebBaseAddress);
-
-    // 1. Clear BeingDebugged flag (PEB + 0x02)
-    WriteProcessMemory(pi.hProcess, reinterpret_cast<LPVOID>(pebAddr + 2), &zeroByte, sizeof(zeroByte), nullptr);
-
-    // 2. Clear NtGlobalFlag (PEB + 0xBC on x64, PEB + 0x68 on x86)
-    BOOL isTarget64 = (nt_generic->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC);
-    uintptr_t ntGlobalFlagOffset = pebAddr + (isTarget64 ? 0xBC : 0x68);
-    WriteProcessMemory(pi.hProcess, reinterpret_cast<LPVOID>(ntGlobalFlagOffset), &zeroDword, sizeof(zeroDword), nullptr);
-
-    Logger::Log("[+] Patched PEB: BeingDebugged and NtGlobalFlag successfully cleared.");
-
-
     BYTE headers[0x1000] = {};
     ReadProcessMemory(pi.hProcess, imageBase, headers, sizeof(headers), nullptr);
 
     auto *dos = (IMAGE_DOS_HEADER *)headers;
 
-    // Check architecture type via Magic number
+    // FIX: Declare nt_generic early so it is available for PEB anti-debug patching
     auto *nt_generic = (IMAGE_NT_HEADERS32 *)((BYTE *)headers + dos->e_lfanew);
+
+    // --- PEB Anti-Debug Flag Scrubbing ---
+    BYTE zeroByte = 0;
+    DWORD zeroDword = 0;
+    uintptr_t pebAddr = reinterpret_cast<uintptr_t>(pbi.PebBaseAddress);
+
+    // Clear BeingDebugged (PEB + 0x02)
+    WriteProcessMemory(pi.hProcess, reinterpret_cast<LPVOID>(pebAddr + 2), &zeroByte, sizeof(zeroByte), nullptr);
+
+    // Clear NtGlobalFlag (PEB + 0xBC on x64, PEB + 0x68 on x86)
+    BOOL isTarget64 = (nt_generic->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC);
+    uintptr_t ntGlobalFlagOffset = pebAddr + (isTarget64 ? 0xBC : 0x68);
+    WriteProcessMemory(pi.hProcess, reinterpret_cast<LPVOID>(ntGlobalFlagOffset), &zeroDword, sizeof(zeroDword), nullptr);
+    Logger::Log("[+] Patched PEB: BeingDebugged and NtGlobalFlag successfully cleared.");
+
+    // Determine Capstone mode and section metadata
     cs_mode capstoneMode = CS_MODE_64;
     SIZE_T imgSize = nt_generic->OptionalHeader.SizeOfImage;
     DWORD oepRVA = nt_generic->OptionalHeader.AddressOfEntryPoint;
@@ -155,7 +154,6 @@ bool VMPDebugger::Run(const std::string &exePath)
         }
     }
 
-
     ResumeThread(pi.hThread);
     Logger::Log("[+] Process resumed - polling .text for VMP stub writes (max 30s)...");
 
@@ -189,14 +187,14 @@ bool VMPDebugger::Run(const std::string &exePath)
                 auto *dos2 = (IMAGE_DOS_HEADER *)hdrBuf;
                 if (dos2->e_magic == IMAGE_DOS_SIGNATURE)
                 {
-                    auto* nt_generic = (IMAGE_NT_HEADERS32*)((BYTE*)hdrBuf + dos2->e_lfanew);
-                    if (nt_generic->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR32_MAGIC) {
-                        auto* nt32 = (IMAGE_NT_HEADERS32*)nt_generic;
+                    auto* nt_generic2 = (IMAGE_NT_HEADERS32*)((BYTE*)hdrBuf + dos2->e_lfanew);
+                    if (nt_generic2->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR32_MAGIC) {
+                        auto* nt32 = (IMAGE_NT_HEADERS32*)nt_generic2;
                         if (nt32->OptionalHeader.SizeOfImage > 0)
                             finalSize = nt32->OptionalHeader.SizeOfImage;
                     }
-                    else if (nt_generic->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC) {
-                        auto* nt64 = (IMAGE_NT_HEADERS64*)nt_generic;
+                    else if (nt_generic2->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC) {
+                        auto* nt64 = (IMAGE_NT_HEADERS64*)nt_generic2;
                         if (nt64->OptionalHeader.SizeOfImage > 0)
                             finalSize = nt64->OptionalHeader.SizeOfImage;
                     }
