@@ -74,8 +74,6 @@ bool VMPDebugger::Run(const std::string &exePath)
     ReadProcessMemory(pi.hProcess, imageBase, headers, sizeof(headers), nullptr);
 
     auto *dos = (IMAGE_DOS_HEADER *)headers;
-
-    // FIX: Declare nt_generic early so it is available for PEB anti-debug patching
     auto *nt_generic = (IMAGE_NT_HEADERS32 *)((BYTE *)headers + dos->e_lfanew);
 
     // --- PEB Anti-Debug Flag Scrubbing ---
@@ -132,27 +130,9 @@ bool VMPDebugger::Run(const std::string &exePath)
         }
     }
 
-    Logger::Log("[+] ImageBase: 0x" + ToHex((uintptr_t)imageBase));
-    Logger::Log("[+] OEP RVA:   0x" + ToHex((uintptr_t)oepRVA));
-    Logger::Log("[+] .text RVA: 0x" + ToHex((uintptr_t)textRVA));
-
-
-    // Set Hardware Breakpoint (DR0) at OEP to bypass software breakpoint detection
-    CONTEXT ctx = { 0 };
-    ctx.ContextFlags = CONTEXT_DEBUG_REGISTERS;
-    if (GetThreadContext(pi.hThread, &ctx)) {
-        ctx.Dr0 = (DWORD_PTR)oepVA;
-        // Bit 0 = enable local DR0 breakpoint
-        ctx.Dr7 |= (1 << 0);
-        // Bits 16-17 = 00 (Break on execution only)
-        ctx.Dr7 &= ~((1 << 16) | (1 << 17));
-
-        if (SetThreadContext(pi.hThread, &ctx)) {
-            Logger::Log("[+] Set Hardware Breakpoint (DR0) at OEP VA: 0x" + ToHex((uintptr_t)oepVA));
-        } else {
-            Logger::Log("[-] Failed to set Hardware Breakpoint.", LogLevel::WARNING);
-        }
-    }
+    Logger::Log("[+] ImageBase: " + ToHex((uintptr_t)imageBase));
+    Logger::Log("[+] OEP RVA:   " + ToHex((uintptr_t)oepRVA));
+    Logger::Log("[+] .text RVA: " + ToHex((uintptr_t)textRVA));
 
     ResumeThread(pi.hThread);
     Logger::Log("[+] Process resumed - polling .text for VMP stub writes (max 30s)...");
@@ -209,7 +189,7 @@ bool VMPDebugger::Run(const std::string &exePath)
 
         if (dead)
         {
-            Logger::Log("[!] Process exited (0x" + ToHex((uintptr_t)exitCode) +
+            Logger::Log("[!] Process exited (" + ToHex((uintptr_t)exitCode) +
                         ") before .text was populated — VMP killed itself pre-initialization.");
             // Last-chance dump even if .text is zero
             dumpDone = DumpProcessImage(pi.hProcess, imageBase, imgSize, "unpacked_dump.bin");
