@@ -345,17 +345,34 @@ void ImportFixer::Fix(PEParser &parser)
         memcpy(idataBase + i * sizeof(IMAGE_IMPORT_DESCRIPTOR), &descs[i], sizeof(IMAGE_IMPORT_DESCRIPTOR));
 
     PIMAGE_DOS_HEADER extDos = (PIMAGE_DOS_HEADER)extImage;
-    PIMAGE_NT_HEADERS extNt = (PIMAGE_NT_HEADERS)(extImage + extDos->e_lfanew);
-    extNt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress = idataRVA;
-    extNt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].Size = descBytes + dataBytes;
-    PIMAGE_SECTION_HEADER newSecPtr = IMAGE_FIRST_SECTION(extNt) + extNt->FileHeader.NumberOfSections;
-    *newSecPtr = newSec;
-    extNt->FileHeader.NumberOfSections++;
-
     if (is64)
-        ((PIMAGE_NT_HEADERS64)extNt)->OptionalHeader.SizeOfImage = newSec.VirtualAddress + ALIGN(newSec.SizeOfRawData, sectionAlignment);
+    {
+        PIMAGE_NT_HEADERS64 extNt64 = (PIMAGE_NT_HEADERS64)(extImage + extDos->e_lfanew);
+        // Explicitly set Index 1 (IMAGE_DIRECTORY_ENTRY_IMPORT)
+        extNt64->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress = idataRVA;
+        extNt64->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].Size = descBytes + dataBytes;
+
+        PIMAGE_SECTION_HEADER newSecPtr = IMAGE_FIRST_SECTION(extNt64) + extNt64->FileHeader.NumberOfSections;
+        *newSecPtr = newSec;
+        extNt64->FileHeader.NumberOfSections++;
+        extNt64->OptionalHeader.SizeOfImage = newSec.VirtualAddress + ALIGN(newSec.SizeOfRawData, sectionAlignment);
+    }
     else
-        ((PIMAGE_NT_HEADERS32)extNt)->OptionalHeader.SizeOfImage = newSec.VirtualAddress + ALIGN(newSec.SizeOfRawData, sectionAlignment);
+    {
+        PIMAGE_NT_HEADERS32 extNt32 = (PIMAGE_NT_HEADERS32)(extImage + extDos->e_lfanew);
+        // Explicitly set Index 1 (IMAGE_DIRECTORY_ENTRY_IMPORT)
+        extNt32->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress = idataRVA;
+        extNt32->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].Size = descBytes + dataBytes;
+
+        // Clear Exception directory (Index 3) if misassigned
+        extNt32->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXCEPTION].VirtualAddress = 0;
+        extNt32->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXCEPTION].Size = 0;
+
+        PIMAGE_SECTION_HEADER newSecPtr = IMAGE_FIRST_SECTION(extNt32) + extNt32->FileHeader.NumberOfSections;
+        *newSecPtr = newSec;
+        extNt32->FileHeader.NumberOfSections++;
+        extNt32->OptionalHeader.SizeOfImage = newSec.VirtualAddress + ALIGN(newSec.SizeOfRawData, sectionAlignment);
+    }
 
     parser.ReplaceImage(extImage, totalSize);
     delete[] extImage;
