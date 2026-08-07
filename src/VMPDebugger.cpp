@@ -303,9 +303,6 @@ bool VMPDebugger::Run(const std::string &exePath)
                         ") before code section was populated — VMP killed itself pre-initialization.");
             dumpDone = DumpProcessImage(pi.hProcess, imageBase, imgSize, "unpacked_dump.bin");
 
-            Logger::Log(Utils::Format("[DEBUG] Dump complete: dumpDone=%d, finalSize=%zu, realOEP RVA=0x%08X",
-                                      dumpDone, finalSize, realOEP),
-                        LogLevel::INFO);
             break;
         }
     }
