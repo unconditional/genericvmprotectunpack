@@ -281,7 +281,7 @@ void ImportFixer::Fix(PEParser &parser)
     newSec.Misc.VirtualSize = idataRawSize;
     newSec.SizeOfRawData = idataRawSize;
     newSec.VirtualAddress = ALIGN(sizeOfImage, sectionAlignment);
-    newSec.PointerToRawData = ALIGN((DWORD)imageSize, fileAlignment);
+    newSec.PointerToRawData = newSec.VirtualAddress; // keep raw-offset == RVA, matching the tool's memory-dump layout convention
     newSec.Characteristics = IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE;
 
     size_t totalSize = (size_t)newSec.PointerToRawData + newSec.SizeOfRawData;

@@ -123,8 +123,35 @@ bool VMPDebugger::Run(const std::string &exePath)
     PROCESS_BASIC_INFORMATION pbi = {};
     NtQueryInformationProcess(pi.hProcess, ProcessBasicInformation, &pbi, sizeof(pbi), NULL);
 
+    BOOL isTargetWow64 = FALSE;
+    IsWow64Process(pi.hProcess, &isTargetWow64);
+
+    // PEB32 ImageBaseAddress is at offset 0x08; PEB64 ImageBaseAddress is at offset 0x10
+    DWORD pebImageBaseOffset = isTargetWow64 ? 0x08 : 0x10;
+
     PVOID imageBase = nullptr;
-    ReadProcessMemory(pi.hProcess, (BYTE *)pbi.PebBaseAddress + 0x10, &imageBase, sizeof(PVOID), nullptr);
+    if (isTargetWow64)
+    {
+        DWORD imageBase32 = 0;
+        if (!ReadProcessMemory(pi.hProcess, (BYTE *)pbi.PebBaseAddress + pebImageBaseOffset,
+                                &imageBase32, sizeof(imageBase32), nullptr))
+        {
+            Logger::Log("[-] Failed to read 32-bit ImageBaseAddress from PEB.", LogLevel::Error);
+            TerminateProcess(pi.hProcess, 0);
+            return false;
+        }
+        imageBase = reinterpret_cast<PVOID>(static_cast<uintptr_t>(imageBase32));
+    }
+    else
+    {
+        if (!ReadProcessMemory(pi.hProcess, (BYTE *)pbi.PebBaseAddress + pebImageBaseOffset,
+                                &imageBase, sizeof(imageBase), nullptr))
+        {
+            Logger::Log("[-] Failed to read 64-bit ImageBaseAddress from PEB.", LogLevel::Error);
+            TerminateProcess(pi.hProcess, 0);
+            return false;
+        }
+    }
 
     BYTE headers[0x1000] = {};
     ReadProcessMemory(pi.hProcess, imageBase, headers, sizeof(headers), nullptr);
