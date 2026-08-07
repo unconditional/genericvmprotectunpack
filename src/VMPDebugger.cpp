@@ -135,12 +135,12 @@ bool VMPDebugger::Run(const std::string &exePath)
     BYTE headers[0x1000] = {};
     ReadProcessMemory(pi.hProcess, imageBase, headers, sizeof(headers), nullptr);
 
-    Logger::Log(Utils::Format("[DEBUG] DOS e_magic=0x%04X, e_lfanew=0x%X, NT Signature=0x%08X, Magic=0x%04X",
-                              dos->e_magic, dos->e_lfanew, nt_generic->Signature, nt_generic->OptionalHeader.Magic),
-                LogLevel::INFO);
-
     auto *dos = (IMAGE_DOS_HEADER *)headers;
     auto *nt_generic = (IMAGE_NT_HEADERS32 *)((BYTE *)headers + dos->e_lfanew);
+
+     Logger::Log(Utils::Format("[DEBUG] DOS e_magic=0x%04X, e_lfanew=0x%X, NT Signature=0x%08X, Magic=0x%04X",
+                              dos->e_magic, dos->e_lfanew, nt_generic->Signature, nt_generic->OptionalHeader.Magic),
+                LogLevel::INFO);
 
     // Patch PEB Anti-Debug Flags
     BYTE zeroByte = 0;
