@@ -15,9 +15,8 @@
 #include "vmprotectunpacker/Analyzer.h"
 
 #ifndef GIT_COMMIT_HASH
-    #define GIT_COMMIT_HASH "unknown"
+#define GIT_COMMIT_HASH "unknown"
 #endif
-
 
 int main(int argc, char *argv[])
 {
@@ -57,7 +56,6 @@ int main(int argc, char *argv[])
         return 0;
     }
 
-
     // Patch PE Header AddressOfEntryPoint with detected real OEP
     DWORD realOEP = debugger.GetDetectedOEP();
     if (realOEP != 0)
@@ -65,7 +63,6 @@ int main(int argc, char *argv[])
         parser.SetOEP(realOEP);
         Logger::Log(Utils::Format("[+] Patched PE Header AddressOfEntryPoint to Real OEP RVA: 0x%08X", realOEP), LogLevel::INFO);
     }
-
 
     std::string reason;
     if (!VMProtectDetector::Detect(parser, reason))
@@ -126,17 +123,25 @@ int main(int argc, char *argv[])
             }
 
             PIMAGE_SECTION_HEADER sec = IMAGE_FIRST_SECTION(nt);
-            DWORD fileAlignment = parser.IsPE64() ?
-                parser.GetNtHeaders64()->OptionalHeader.FileAlignment :
-                parser.GetNtHeaders32()->OptionalHeader.FileAlignment;
+            DWORD fileAlignment = parser.IsPE64() ? parser.GetNtHeaders64()->OptionalHeader.FileAlignment : parser.GetNtHeaders32()->OptionalHeader.FileAlignment;
 
             for (int i = 0; i < nt->FileHeader.NumberOfSections; ++i, ++sec)
             {
                 if (sec->Misc.VirtualSize != 0)
                 {
+                    DWORD oldPtr = sec->PointerToRawData;
+                    DWORD oldSize = sec->SizeOfRawData;
+
                     sec->PointerToRawData = sec->VirtualAddress;
                     // Properly align SizeOfRawData using FileAlignment to avoid PE loader corruption
                     sec->SizeOfRawData = (sec->Misc.VirtualSize + fileAlignment - 1) & ~(fileAlignment - 1);
+
+                    char name[9] = {0};
+                    memcpy(name, sec->Name, 8);
+                    Logger::Log(Utils::Format(
+                                    "[DEBUG] Section fixup: %-8s VA=0x%08X  PTR %08X->%08X  SizeOfRawData %08X->%08X",
+                                    name, sec->VirtualAddress, oldPtr, sec->PointerToRawData, oldSize, sec->SizeOfRawData),
+                                LogLevel::INFO);
                 }
             }
         }

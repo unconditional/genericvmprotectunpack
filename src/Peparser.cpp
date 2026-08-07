@@ -83,16 +83,21 @@ bool PEParser::Load(const std::string &filepath)
     // Offset of ImageBaseAddress in 32-bit PEB is 0x08; in 64-bit PEB it is 0x10
     DWORD imageBaseOffset = isWow64 ? 0x08 : 0x10;
 
-    if (isWow64) {
+    if (isWow64)
+    {
         DWORD imageBase32 = 0;
-        if (!ReadProcessMemory(pi.hProcess, (BYTE *)pebAddress + imageBaseOffset, &imageBase32, sizeof(imageBase32), &bytesRead)) {
+        if (!ReadProcessMemory(pi.hProcess, (BYTE *)pebAddress + imageBaseOffset, &imageBase32, sizeof(imageBase32), &bytesRead))
+        {
             Logger::Log("[-] Failed to read 32-bit ImageBaseAddress from PEB.", LogLevel::Error);
             TerminateProcess(pi.hProcess, 0);
             return false;
         }
         imageBaseAddr = reinterpret_cast<PVOID>(static_cast<uintptr_t>(imageBase32));
-    } else {
-        if (!ReadProcessMemory(pi.hProcess, (BYTE *)pebAddress + imageBaseOffset, &imageBaseAddr, sizeof(imageBaseAddr), &bytesRead)) {
+    }
+    else
+    {
+        if (!ReadProcessMemory(pi.hProcess, (BYTE *)pebAddress + imageBaseOffset, &imageBaseAddr, sizeof(imageBaseAddr), &bytesRead))
+        {
             Logger::Log("[-] Failed to read 64-bit ImageBaseAddress from PEB.", LogLevel::Error);
             TerminateProcess(pi.hProcess, 0);
             return false;
@@ -197,6 +202,10 @@ bool PEParser::LoadF(const std::string &filepath, bool isMemoryLayout)
     this->isSuspendedDump = isMemoryLayout;
 
     Logger::Log("[+] Successfully loaded PE file: " + filepath, LogLevel::INFO);
+
+    Logger::Log(Utils::Format("[DEBUG] LoadF: isMemoryLayout=%d, imageSize=%zu, sections=%d",
+                              isMemoryLayout, imageSize, GetNtHeadersRaw() ? GetNtHeadersRaw()->FileHeader.NumberOfSections : -1),
+                LogLevel::INFO);
 
     return true;
 }
@@ -484,6 +493,9 @@ void PEParser::SetOEP(DWORD newOepRVA)
     PIMAGE_NT_HEADERS nt = GetNtHeadersRaw();
     if (!nt)
         return;
+
+    DWORD oldOep = nt->OptionalHeader.AddressOfEntryPoint; // works for both, field offset is same up to this point... actually read via typed getter below
+    Logger::Log(Utils::Format("[DEBUG] SetOEP: old=0x%08X new=0x%08X", GetOEP(), newOepRVA), LogLevel::INFO);
 
     if (IsPE64())
     {

@@ -10,7 +10,6 @@
 #include <capstone/capstone.h>
 #include <iomanip>
 
-
 static bool TextSectionPopulated(HANDLE hProcess, LPVOID imageBase, DWORD textRVA, size_t checkBytes = 256)
 {
     std::vector<BYTE> buf(checkBytes, 0);
@@ -49,7 +48,8 @@ static void SuspendAllThreads(DWORD pid)
 
 DWORD VMPDebugger::FindRealOEP(HANDLE hProcess, LPVOID imageBase, DWORD codeRVA, DWORD codeSize, bool is64)
 {
-    if (codeSize == 0) codeSize = 0x00100000;
+    if (codeSize == 0)
+        codeSize = 0x00100000;
     std::vector<BYTE> codeBuf(codeSize);
     SIZE_T bytesRead = 0;
 
@@ -123,38 +123,19 @@ bool VMPDebugger::Run(const std::string &exePath)
     PROCESS_BASIC_INFORMATION pbi = {};
     NtQueryInformationProcess(pi.hProcess, ProcessBasicInformation, &pbi, sizeof(pbi), NULL);
 
-    BOOL isTargetWow64 = FALSE;
-    IsWow64Process(pi.hProcess, &isTargetWow64);
-
-    // PEB32 ImageBaseAddress is at offset 0x08; PEB64 ImageBaseAddress is at offset 0x10
-    DWORD pebImageBaseOffset = isTargetWow64 ? 0x08 : 0x10;
-
     PVOID imageBase = nullptr;
-    if (isTargetWow64)
-    {
-        DWORD imageBase32 = 0;
-        if (!ReadProcessMemory(pi.hProcess, (BYTE *)pbi.PebBaseAddress + pebImageBaseOffset,
-                                &imageBase32, sizeof(imageBase32), nullptr))
-        {
-            Logger::Log("[-] Failed to read 32-bit ImageBaseAddress from PEB.", LogLevel::Error);
-            TerminateProcess(pi.hProcess, 0);
-            return false;
-        }
-        imageBase = reinterpret_cast<PVOID>(static_cast<uintptr_t>(imageBase32));
-    }
-    else
-    {
-        if (!ReadProcessMemory(pi.hProcess, (BYTE *)pbi.PebBaseAddress + pebImageBaseOffset,
-                                &imageBase, sizeof(imageBase), nullptr))
-        {
-            Logger::Log("[-] Failed to read 64-bit ImageBaseAddress from PEB.", LogLevel::Error);
-            TerminateProcess(pi.hProcess, 0);
-            return false;
-        }
-    }
+    ReadProcessMemory(pi.hProcess, (BYTE *)pbi.PebBaseAddress + 0x10, &imageBase, sizeof(PVOID), nullptr);
+
+    Logger::Log(Utils::Format("[DEBUG] isTargetWow64=%d, PebBaseAddress=0x%p, ImageBase=0x%p",
+                              isTargetWow64, pbi.PebBaseAddress, imageBase),
+                LogLevel::INFO);
 
     BYTE headers[0x1000] = {};
     ReadProcessMemory(pi.hProcess, imageBase, headers, sizeof(headers), nullptr);
+
+    Logger::Log(Utils::Format("[DEBUG] DOS e_magic=0x%04X, e_lfanew=0x%X, NT Signature=0x%08X, Magic=0x%04X",
+                              dos->e_magic, dos->e_lfanew, nt_generic->Signature, nt_generic->OptionalHeader.Magic),
+                LogLevel::INFO);
 
     auto *dos = (IMAGE_DOS_HEADER *)headers;
     auto *nt_generic = (IMAGE_NT_HEADERS32 *)((BYTE *)headers + dos->e_lfanew);
@@ -217,7 +198,8 @@ bool VMPDebugger::Run(const std::string &exePath)
             char stubName[9] = {};
             memcpy(stubName, secs[i].Name, 8);
             Logger::Log("[*] Identified protector stub section dynamically: " + std::string(stubName) +
-                        " (RVA: " + ToHex((uintptr_t)secStart) + ")", LogLevel::INFO);
+                            " (RVA: " + ToHex((uintptr_t)secStart) + ")",
+                        LogLevel::INFO);
             break;
         }
     }
@@ -234,8 +216,8 @@ bool VMPDebugger::Run(const std::string &exePath)
         std::string sName(name);
 
         bool isExecutableCode = (secs[i].Characteristics & IMAGE_SCN_CNT_CODE) ||
-                               (secs[i].Characteristics & IMAGE_SCN_MEM_EXECUTE) ||
-                               (sName == "CODE" || sName == ".text");
+                                (secs[i].Characteristics & IMAGE_SCN_MEM_EXECUTE) ||
+                                (sName == "CODE" || sName == ".text");
 
         if (isExecutableCode)
         {
@@ -283,14 +265,16 @@ bool VMPDebugger::Run(const std::string &exePath)
                 auto *dos2 = (IMAGE_DOS_HEADER *)hdrBuf;
                 if (dos2->e_magic == IMAGE_DOS_SIGNATURE)
                 {
-                    auto* nt_generic2 = (IMAGE_NT_HEADERS32*)((BYTE*)hdrBuf + dos2->e_lfanew);
-                    if (nt_generic2->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR32_MAGIC) {
-                        auto* nt32 = (IMAGE_NT_HEADERS32*)nt_generic2;
+                    auto *nt_generic2 = (IMAGE_NT_HEADERS32 *)((BYTE *)hdrBuf + dos2->e_lfanew);
+                    if (nt_generic2->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR32_MAGIC)
+                    {
+                        auto *nt32 = (IMAGE_NT_HEADERS32 *)nt_generic2;
                         if (nt32->OptionalHeader.SizeOfImage > 0)
                             finalSize = nt32->OptionalHeader.SizeOfImage;
                     }
-                    else if (nt_generic2->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC) {
-                        auto* nt64 = (IMAGE_NT_HEADERS64*)nt_generic2;
+                    else if (nt_generic2->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC)
+                    {
+                        auto *nt64 = (IMAGE_NT_HEADERS64 *)nt_generic2;
                         if (nt64->OptionalHeader.SizeOfImage > 0)
                             finalSize = nt64->OptionalHeader.SizeOfImage;
                     }
@@ -298,6 +282,10 @@ bool VMPDebugger::Run(const std::string &exePath)
             }
 
             dumpDone = DumpProcessImage(pi.hProcess, imageBase, finalSize, "unpacked_dump.bin");
+
+            Logger::Log(Utils::Format("[DEBUG] Dump complete: dumpDone=%d, finalSize=%zu, realOEP RVA=0x%08X",
+                                      dumpDone, finalSize, realOEP),
+                        LogLevel::INFO);
 
             // Scan process memory for real OEP
             realOEP = FindRealOEP(pi.hProcess, imageBase, codeRVA, codeSize, (capstoneMode == CS_MODE_64));
@@ -312,6 +300,10 @@ bool VMPDebugger::Run(const std::string &exePath)
             Logger::Log("[!] Process exited (" + ToHex((uintptr_t)exitCode) +
                         ") before code section was populated — VMP killed itself pre-initialization.");
             dumpDone = DumpProcessImage(pi.hProcess, imageBase, imgSize, "unpacked_dump.bin");
+
+            Logger::Log(Utils::Format("[DEBUG] Dump complete: dumpDone=%d, finalSize=%zu, realOEP RVA=0x%08X",
+                                      dumpDone, finalSize, realOEP),
+                        LogLevel::INFO);
             break;
         }
     }

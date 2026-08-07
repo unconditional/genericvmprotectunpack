@@ -284,6 +284,12 @@ void ImportFixer::Fix(PEParser &parser)
     newSec.PointerToRawData = newSec.VirtualAddress; // keep raw-offset == RVA, matching the tool's memory-dump layout convention
     newSec.Characteristics = IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE;
 
+    Logger::Log(Utils::Format(
+                    "[DEBUG] .idata section: VA=0x%08X PointerToRawData=0x%08X SizeOfRawData=0x%08X (VA==PTR? %s)",
+                    newSec.VirtualAddress, newSec.PointerToRawData, newSec.SizeOfRawData,
+                    (newSec.VirtualAddress == newSec.PointerToRawData) ? "YES" : "NO"),
+                LogLevel::INFO);
+
     size_t totalSize = (size_t)newSec.PointerToRawData + newSec.SizeOfRawData;
     BYTE *extImage = new BYTE[totalSize]();
     memcpy(extImage, image, imageSize);
@@ -375,6 +381,18 @@ void ImportFixer::Fix(PEParser &parser)
     }
 
     parser.ReplaceImage(extImage, totalSize);
+
+    Logger::Log(Utils::Format(
+                    "[DEBUG] Post-import-fix image: totalSize=%zu, DataDirectory[IMPORT].VA=0x%08X Size=0x%08X, NumberOfSections=%d",
+                    totalSize,
+                    is64 ? ((PIMAGE_NT_HEADERS64)(extImage + extDos->e_lfanew))->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress
+                         : ((PIMAGE_NT_HEADERS32)(extImage + extDos->e_lfanew))->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress,
+                    is64 ? ((PIMAGE_NT_HEADERS64)(extImage + extDos->e_lfanew))->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].Size
+                         : ((PIMAGE_NT_HEADERS32)(extImage + extDos->e_lfanew))->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].Size,
+                    is64 ? ((PIMAGE_NT_HEADERS64)(extImage + extDos->e_lfanew))->FileHeader.NumberOfSections
+                        : ((PIMAGE_NT_HEADERS32)(extImage + extDos->e_lfanew))->FileHeader.NumberOfSections),
+                LogLevel::INFO);
+
     delete[] extImage;
 
     Logger::Log(Utils::Format("[+] Import table rebuilt: %u DLLs injected into .idata section.", (unsigned)descs.size()), LogLevel::INFO);
