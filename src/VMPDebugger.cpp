@@ -25,7 +25,7 @@ static bool TextSectionPopulated(HANDLE hProcess, LPVOID imageBase, DWORD textRV
 static bool TextSectionStable(HANDLE hProcess, LPVOID imageBase, DWORD textRVA, DWORD textSize,
                               size_t sampleBytes, DWORD stabilityDelayMs)
 {
-    size_t n = min<size_t>(sampleBytes, textSize);
+    size_t n = std::min<size_t>(sampleBytes, textSize);
     std::vector<BYTE> before(n), after(n);
     SIZE_T r1 = 0, r2 = 0;
 
@@ -282,7 +282,7 @@ bool VMPDebugger::Run(const std::string &exePath)
 
             // --- DIAGNOSTIC: confirm whether the section is still being written to ---
             {
-                std::vector<BYTE> snap1(min<DWORD>(codeSize ? codeSize : 0x10000, 0x10000));
+                std::vector<BYTE> snap1(std:min<DWORD>(codeSize ? codeSize : 0x10000, 0x10000));
                 ReadProcessMemory(pi.hProcess, (BYTE *)imageBase + codeRVA, snap1.data(), snap1.size(), nullptr);
                 Sleep(300);
                 std::vector<BYTE> snap2(snap1.size());
