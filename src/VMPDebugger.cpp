@@ -282,7 +282,7 @@ bool VMPDebugger::Run(const std::string &exePath)
 
             // --- DIAGNOSTIC: confirm whether the section is still being written to ---
             {
-                std::vector<BYTE> snap1(std:min<DWORD>(codeSize ? codeSize : 0x10000, 0x10000));
+                std::vector<BYTE> snap1(std::min<DWORD>(codeSize ? codeSize : 0x10000, 0x10000));
                 ReadProcessMemory(pi.hProcess, (BYTE *)imageBase + codeRVA, snap1.data(), snap1.size(), nullptr);
                 Sleep(300);
                 std::vector<BYTE> snap2(snap1.size());
