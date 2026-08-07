@@ -22,6 +22,34 @@ static bool TextSectionPopulated(HANDLE hProcess, LPVOID imageBase, DWORD textRV
     return false;
 }
 
+static bool TextSectionStable(HANDLE hProcess, LPVOID imageBase, DWORD textRVA, DWORD textSize,
+                              size_t sampleBytes, DWORD stabilityDelayMs)
+{
+    size_t n = min<size_t>(sampleBytes, textSize);
+    std::vector<BYTE> before(n), after(n);
+    SIZE_T r1 = 0, r2 = 0;
+
+    if (!ReadProcessMemory(hProcess, (BYTE *)imageBase + textRVA, before.data(), n, &r1) || r1 == 0)
+        return false;
+
+    bool anyNonZero = false;
+    for (size_t i = 0; i < r1; ++i)
+        if (before[i] != 0)
+        {
+            anyNonZero = true;
+            break;
+        }
+    if (!anyNonZero)
+        return false;
+
+    Sleep(stabilityDelayMs);
+
+    if (!ReadProcessMemory(hProcess, (BYTE *)imageBase + textRVA, after.data(), n, &r2) || r2 != r1)
+        return false;
+
+    return memcmp(before.data(), after.data(), r1) == 0;
+}
+
 static void SuspendAllThreads(DWORD pid)
 {
     HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, pid);
@@ -138,7 +166,7 @@ bool VMPDebugger::Run(const std::string &exePath)
     auto *dos = (IMAGE_DOS_HEADER *)headers;
     auto *nt_generic = (IMAGE_NT_HEADERS32 *)((BYTE *)headers + dos->e_lfanew);
 
-     Logger::Log(Utils::Format("[DEBUG] DOS e_magic=0x%04X, e_lfanew=0x%X, NT Signature=0x%08X, Magic=0x%04X",
+    Logger::Log(Utils::Format("[DEBUG] DOS e_magic=0x%04X, e_lfanew=0x%X, NT Signature=0x%08X, Magic=0x%04X",
                               dos->e_magic, dos->e_lfanew, nt_generic->Signature, nt_generic->OptionalHeader.Magic),
                 LogLevel::INFO);
 
@@ -251,6 +279,20 @@ bool VMPDebugger::Run(const std::string &exePath)
         if (TextSectionPopulated(pi.hProcess, imageBase, codeRVA, 256))
         {
             Logger::Log("[+] Code section populated after ~" + std::to_string(poll * 10) + "ms");
+
+            // --- DIAGNOSTIC: confirm whether the section is still being written to ---
+            {
+                std::vector<BYTE> snap1(min<DWORD>(codeSize ? codeSize : 0x10000, 0x10000));
+                ReadProcessMemory(pi.hProcess, (BYTE *)imageBase + codeRVA, snap1.data(), snap1.size(), nullptr);
+                Sleep(300);
+                std::vector<BYTE> snap2(snap1.size());
+                ReadProcessMemory(pi.hProcess, (BYTE *)imageBase + codeRVA, snap2.data(), snap2.size(), nullptr);
+                bool stable = (snap1 == snap2);
+                Logger::Log(Utils::Format("[DEBUG] Code section stability check: %s after extra 300ms",
+                                          stable ? "STABLE (no change)" : "STILL CHANGING"),
+                            LogLevel::WARNING);
+            }
+            // --- END DIAGNOSTIC ---
 
             if (!dead)
             {
