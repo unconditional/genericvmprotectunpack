@@ -276,22 +276,25 @@ bool VMPDebugger::Run(const std::string &exePath)
         GetExitCodeProcess(pi.hProcess, &exitCode);
         bool dead = (exitCode != STILL_ACTIVE);
 
-        if (TextSectionPopulated(pi.hProcess, imageBase, codeRVA, 256))
+        DWORD stabilityWindowSize = codeSize ? codeSize : 0x00100000;
+        size_t stabilitySampleSize = std::min<DWORD>(stabilityWindowSize, 0x00100000);
+
+        if (TextSectionStable(pi.hProcess, imageBase, codeRVA, stabilityWindowSize, stabilitySampleSize, 250))
         {
-            Logger::Log("[+] Code section populated after ~" + std::to_string(poll * 10) + "ms");
+            Logger::Log("[+] Code section populated and stable after ~" + std::to_string(poll * 10) + "ms");
 
             // --- DIAGNOSTIC: confirm whether the section is still being written to ---
-            {
-                std::vector<BYTE> snap1(std::min<DWORD>(codeSize ? codeSize : 0x10000, 0x10000));
-                ReadProcessMemory(pi.hProcess, (BYTE *)imageBase + codeRVA, snap1.data(), snap1.size(), nullptr);
-                Sleep(300);
-                std::vector<BYTE> snap2(snap1.size());
-                ReadProcessMemory(pi.hProcess, (BYTE *)imageBase + codeRVA, snap2.data(), snap2.size(), nullptr);
-                bool stable = (snap1 == snap2);
-                Logger::Log(Utils::Format("[DEBUG] Code section stability check: %s after extra 300ms",
-                                          stable ? "STABLE (no change)" : "STILL CHANGING"),
-                            LogLevel::WARNING);
-            }
+            // {
+            //     std::vector<BYTE> snap1(std::min<DWORD>(codeSize ? codeSize : 0x10000, 0x10000));
+            //     ReadProcessMemory(pi.hProcess, (BYTE *)imageBase + codeRVA, snap1.data(), snap1.size(), nullptr);
+            //     Sleep(300);
+            //     std::vector<BYTE> snap2(snap1.size());
+            //     ReadProcessMemory(pi.hProcess, (BYTE *)imageBase + codeRVA, snap2.data(), snap2.size(), nullptr);
+            //     bool stable = (snap1 == snap2);
+            //     Logger::Log(Utils::Format("[DEBUG] Code section stability check: %s after extra 300ms",
+            //                               stable ? "STABLE (no change)" : "STILL CHANGING"),
+            //                 LogLevel::WARNING);
+            // }
             // --- END DIAGNOSTIC ---
 
             if (!dead)
