@@ -2,6 +2,7 @@
 #include <iostream>
 #include <fstream>
 #include "vmprotectunpacker/Logger.h"
+#include "vmprotectunpacker/Utils.h"
 #include <winternl.h>
 
 PEParser::PEParser() : filePath(""), hFile(NULL), hMapping(NULL), mappedImage(nullptr), imageSize(0) {}

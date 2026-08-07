@@ -126,6 +126,8 @@ bool VMPDebugger::Run(const std::string &exePath)
     PVOID imageBase = nullptr;
     ReadProcessMemory(pi.hProcess, (BYTE *)pbi.PebBaseAddress + 0x10, &imageBase, sizeof(PVOID), nullptr);
 
+    BOOL isTargetWow64 = FALSE;
+    IsWow64Process(pi.hProcess, &isTargetWow64);
     Logger::Log(Utils::Format("[DEBUG] isTargetWow64=%d, PebBaseAddress=0x%p, ImageBase=0x%p",
                               isTargetWow64, pbi.PebBaseAddress, imageBase),
                 LogLevel::INFO);
