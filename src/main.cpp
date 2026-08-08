@@ -155,27 +155,6 @@ int main(int argc, char *argv[])
                     DWORD oldPtr = sec->PointerToRawData;
                     DWORD oldSize = sec->SizeOfRawData;
 
-                    char name[9] = {0};
-                    memcpy(name, sec->Name, 8);
-                    std::string secNameStr(name);
-
-                    // BSS (and any similarly-named uninitialized-data section) must start
-                    // as all zeros on every fresh launch, per PE/OS loader contract. Our
-                    // memory dump captured whatever transient runtime state the stub/CRT
-                    // had already written there by the time we suspended the process —
-                    // baking that stale snapshot into the file causes nondeterministic
-                    // behavior (different uninitialized values => different exit codes/paths
-                    // on every run). Zero it out to restore the pristine state a real
-                    // launch would provide.
-                    if (secNameStr == "BSS")
-                    {
-                        BYTE *bssData = parser.GetMappedImage() + sec->VirtualAddress;
-                        memset(bssData, 0, sec->Misc.VirtualSize);
-                        Logger::Log(Utils::Format("[+] Zeroed BSS section (%u bytes) to restore pristine uninitialized-data state.",
-                                                  (unsigned)sec->Misc.VirtualSize),
-                                    LogLevel::INFO);
-                    }
-
                     sec->PointerToRawData = sec->VirtualAddress;
                     sec->SizeOfRawData = (sec->Misc.VirtualSize + fileAlignment - 1) & ~(fileAlignment - 1);
 
