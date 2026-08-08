@@ -58,6 +58,18 @@ int main(int argc, char *argv[])
 
     // Patch PE Header AddressOfEntryPoint with detected real OEP
     DWORD realOEP = debugger.GetDetectedOEP();
+
+
+
+    // TEMP OVERRIDE: FindRealOEP's first-match heuristic found an inner
+    // initialization subroutine (0x1B38), not the true entry point. Manual
+    // xref-tracing in x64dbg confirmed the actual entry wrapper (which sets up
+    // the top-level SEH frame, runs required RTL init calls, then calls 0x1B38)
+    // starts at RVA 0x6088.
+    realOEP = 0x6088;
+
+
+
     if (realOEP != 0)
     {
         parser.SetOEP(realOEP);
