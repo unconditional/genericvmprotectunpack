@@ -59,16 +59,12 @@ int main(int argc, char *argv[])
     // Patch PE Header AddressOfEntryPoint with detected real OEP
     DWORD realOEP = debugger.GetDetectedOEP();
 
-
-
     // TEMP OVERRIDE: FindRealOEP's first-match heuristic found an inner
     // initialization subroutine (0x1B38), not the true entry point. Manual
     // xref-tracing in x64dbg confirmed the actual entry wrapper (which sets up
     // the top-level SEH frame, runs required RTL init calls, then calls 0x1B38)
     // starts at RVA 0x6088.
     realOEP = 0x6088;
-
-
 
     if (realOEP != 0)
     {
@@ -110,6 +106,8 @@ int main(int argc, char *argv[])
     ImportFixer::Fix(parser);
 
 
+
+
     // Reset the one-time-initialization reentrancy guard at RVA 0xDB5BC (VA 0x4DB5BC).
     // The idiom "inc dword ptr [addr]; jne skip_init" expects this counter to start
     // at -1 so the first increment yields 0 (ZF=1, jne not taken) and lets the real
@@ -123,6 +121,20 @@ int main(int argc, char *argv[])
         memcpy(guardPtr, &resetValue, sizeof(resetValue));
         Logger::Log(Utils::Format("[+] Reset initialization guard at RVA 0x%08X to -1 (was mid-execution value).", guardRVA), LogLevel::INFO);
     }
+
+    // Force the one-shot "extra initialization" gate at RVA 0xDB5C4 (VA 0x4DB5C4) to non-zero.
+    // The idiom "cmp byte ptr [addr], 0 / je skip_extra_init ... mov byte ptr [addr], 0" (later)
+    // shows this flag must be non-zero on entry to run the initialization block, then gets
+    // explicitly cleared once done. Our BSS dump defaulted it to 0, causing this branch to
+    // always skip the block that leads into COM/thread/GUI setup.
+    {
+        DWORD flagRVA = 0xDB5C4;
+        BYTE *flagPtr = parser.GetMappedImage() + flagRVA;
+        *flagPtr = 0x01;
+        Logger::Log(Utils::Format("[+] Forced flag at RVA 0x%08X to non-zero to bypass early-exit branch.", flagRVA), LogLevel::INFO);
+    }
+
+
 
 
     Logger::Log("[+] Dumping decrypted shellcode (if any)...", LogLevel::INFO);
