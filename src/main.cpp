@@ -155,6 +155,9 @@ int main(int argc, char *argv[])
                     DWORD oldPtr = sec->PointerToRawData;
                     DWORD oldSize = sec->SizeOfRawData;
 
+                    char name[9] = {0};
+                    memcpy(name, sec->Name, 8);
+
                     sec->PointerToRawData = sec->VirtualAddress;
                     sec->SizeOfRawData = (sec->Misc.VirtualSize + fileAlignment - 1) & ~(fileAlignment - 1);
 
