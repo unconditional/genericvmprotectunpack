@@ -60,7 +60,7 @@ int main(int argc, char *argv[])
     DWORD realOEP = debugger.GetDetectedOEP();
     if (realOEP != 0)
     {
-        // parser.SetOEP(realOEP);
+        parser.SetOEP(realOEP);
         Logger::Log(Utils::Format("[+] Patched PE Header AddressOfEntryPoint to Real OEP RVA: 0x%08X", realOEP), LogLevel::INFO);
     }
 
@@ -80,16 +80,16 @@ int main(int argc, char *argv[])
     }
 
     // DEBUG
-    {
-        BYTE *probe = parser.RvaToVa(0x13d0);
-        if (probe)
-        {
-            std::ostringstream oss;
-            for (int i = 0; i < 32; ++i)
-                oss << std::hex << std::setw(2) << std::setfill('0') << (int)probe[i] << " ";
-            Logger::Log("[DEBUG] Bytes at RVA 0x13D0 (call target): " + oss.str(), LogLevel::INFO);
-        }
-    }
+    // {
+    //     BYTE *probe = parser.RvaToVa(0x13d0);
+    //     if (probe)
+    //     {
+    //         std::ostringstream oss;
+    //         for (int i = 0; i < 32; ++i)
+    //             oss << std::hex << std::setw(2) << std::setfill('0') << (int)probe[i] << " ";
+    //         Logger::Log("[DEBUG] Bytes at RVA 0x13D0 (call target): " + oss.str(), LogLevel::INFO);
+    //     }
+    // }
 
     Logger::Log("[+] Bytecode extracted. Devirtualizing...", LogLevel::INFO);
     Devirtualizer::Devirtualize(&parser, bytecodeRegions.data(), bytecodeRegions.size());
@@ -143,12 +143,30 @@ int main(int argc, char *argv[])
                     DWORD oldPtr = sec->PointerToRawData;
                     DWORD oldSize = sec->SizeOfRawData;
 
-                    sec->PointerToRawData = sec->VirtualAddress;
-                    // Properly align SizeOfRawData using FileAlignment to avoid PE loader corruption
-                    sec->SizeOfRawData = (sec->Misc.VirtualSize + fileAlignment - 1) & ~(fileAlignment - 1);
-
                     char name[9] = {0};
                     memcpy(name, sec->Name, 8);
+                    std::string secNameStr(name);
+
+                    // BSS (and any similarly-named uninitialized-data section) must start
+                    // as all zeros on every fresh launch, per PE/OS loader contract. Our
+                    // memory dump captured whatever transient runtime state the stub/CRT
+                    // had already written there by the time we suspended the process —
+                    // baking that stale snapshot into the file causes nondeterministic
+                    // behavior (different uninitialized values => different exit codes/paths
+                    // on every run). Zero it out to restore the pristine state a real
+                    // launch would provide.
+                    if (secNameStr == "BSS")
+                    {
+                        BYTE *bssData = parser.GetMappedImage() + sec->VirtualAddress;
+                        memset(bssData, 0, sec->Misc.VirtualSize);
+                        Logger::Log(Utils::Format("[+] Zeroed BSS section (%u bytes) to restore pristine uninitialized-data state.",
+                                                  (unsigned)sec->Misc.VirtualSize),
+                                    LogLevel::INFO);
+                    }
+
+                    sec->PointerToRawData = sec->VirtualAddress;
+                    sec->SizeOfRawData = (sec->Misc.VirtualSize + fileAlignment - 1) & ~(fileAlignment - 1);
+
                     Logger::Log(Utils::Format(
                                     "[DEBUG] Section fixup: %-8s VA=0x%08X  PTR %08X->%08X  SizeOfRawData %08X->%08X",
                                     name, sec->VirtualAddress, oldPtr, sec->PointerToRawData, oldSize, sec->SizeOfRawData),
