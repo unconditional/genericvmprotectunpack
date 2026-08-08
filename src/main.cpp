@@ -109,6 +109,22 @@ int main(int argc, char *argv[])
     Logger::Log("[+] Devirtualization complete. Fixing imports...", LogLevel::INFO);
     ImportFixer::Fix(parser);
 
+
+    // Reset the one-time-initialization reentrancy guard at RVA 0xDB5BC (VA 0x4DB5BC).
+    // The idiom "inc dword ptr [addr]; jne skip_init" expects this counter to start
+    // at -1 so the first increment yields 0 (ZF=1, jne not taken) and lets the real
+    // COM/thread/GUI initialization block run. Our memory dump captured this counter
+    // mid-execution, already incremented past -1, so a fresh launch's "inc" never
+    // produces zero and permanently skips initialization.
+    {
+        DWORD guardRVA = 0xDB5BC;
+        BYTE *guardPtr = parser.GetMappedImage() + guardRVA; // offset == RVA convention for the suspended dump
+        DWORD resetValue = 0xFFFFFFFF;
+        memcpy(guardPtr, &resetValue, sizeof(resetValue));
+        Logger::Log(Utils::Format("[+] Reset initialization guard at RVA 0x%08X to -1 (was mid-execution value).", guardRVA), LogLevel::INFO);
+    }
+
+
     Logger::Log("[+] Dumping decrypted shellcode (if any)...", LogLevel::INFO);
     ShellcodeDumper shellCodeDump(parser.GetFilePath());
     shellCodeDump.Dump(parser);
