@@ -60,7 +60,7 @@ int main(int argc, char *argv[])
     DWORD realOEP = debugger.GetDetectedOEP();
     if (realOEP != 0)
     {
-        parser.SetOEP(realOEP);
+        // parser.SetOEP(realOEP);
         Logger::Log(Utils::Format("[+] Patched PE Header AddressOfEntryPoint to Real OEP RVA: 0x%08X", realOEP), LogLevel::INFO);
     }
 
@@ -73,11 +73,22 @@ int main(int argc, char *argv[])
 
     Logger::Log("[+] VMProtect detected. Extracting bytecode...", LogLevel::INFO);
     auto bytecodeRegions = BytecodeExtractor::Extract(&parser);
-
     if (bytecodeRegions.empty())
     {
         Logger::Log("[-] Failed to extract VMProtect bytecode.", LogLevel::Error);
         return 1;
+    }
+
+    // DEBUG
+    {
+        BYTE *probe = parser.RvaToVa(0x13d0);
+        if (probe)
+        {
+            std::ostringstream oss;
+            for (int i = 0; i < 32; ++i)
+                oss << std::hex << std::setw(2) << std::setfill('0') << (int)probe[i] << " ";
+            Logger::Log("[DEBUG] Bytes at RVA 0x13D0 (call target): " + oss.str(), LogLevel::INFO);
+        }
     }
 
     Logger::Log("[+] Bytecode extracted. Devirtualizing...", LogLevel::INFO);
