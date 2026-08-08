@@ -10,6 +10,13 @@
 #include <capstone/capstone.h>
 #include <iomanip>
 
+struct GhostRegion
+{
+    DWORD rva;
+    DWORD size;
+    std::string name;
+};
+
 static bool TextSectionPopulated(HANDLE hProcess, LPVOID imageBase, DWORD textRVA, size_t checkBytes = 256)
 {
     std::vector<BYTE> buf(checkBytes, 0);
@@ -50,9 +57,9 @@ static bool TextSectionStable(HANDLE hProcess, LPVOID imageBase, DWORD textRVA, 
     return memcmp(before.data(), after.data(), r1) == 0;
 }
 
-static bool AllGhostRegionsStable(HANDLE hProcess, LPVOID imageBase, const std::vector<GhostRegion>& regions)
+static bool AllGhostRegionsStable(HANDLE hProcess, LPVOID imageBase, const std::vector<GhostRegion> &regions)
 {
-    for (auto& r : regions)
+    for (auto &r : regions)
     {
         DWORD sampleWindow = r.size ? r.size : 0x00100000;
         size_t sampleSize = std::min<DWORD>(sampleWindow, 0x00400000); // cap at 4MB per region to bound cost
@@ -61,7 +68,6 @@ static bool AllGhostRegionsStable(HANDLE hProcess, LPVOID imageBase, const std::
     }
     return true;
 }
-
 
 static void SuspendAllThreads(DWORD pid)
 {
@@ -248,12 +254,6 @@ bool VMPDebugger::Run(const std::string &exePath)
     }
 
     // 2. Select the main application payload code section (executable section distinct from the stub)
-    struct GhostRegion
-    {
-        DWORD rva;
-        DWORD size;
-        std::string name;
-    };
     std::vector<GhostRegion> ghostRegions;
 
     for (int i = 0; i < numberOfSections; ++i)
