@@ -50,6 +50,19 @@ static bool TextSectionStable(HANDLE hProcess, LPVOID imageBase, DWORD textRVA, 
     return memcmp(before.data(), after.data(), r1) == 0;
 }
 
+static bool AllGhostRegionsStable(HANDLE hProcess, LPVOID imageBase, const std::vector<GhostRegion>& regions)
+{
+    for (auto& r : regions)
+    {
+        DWORD sampleWindow = r.size ? r.size : 0x00100000;
+        size_t sampleSize = std::min<DWORD>(sampleWindow, 0x00400000); // cap at 4MB per region to bound cost
+        if (!TextSectionStable(hProcess, imageBase, r.rva, r.size, sampleSize, 250))
+            return false;
+    }
+    return true;
+}
+
+
 static void SuspendAllThreads(DWORD pid)
 {
     HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, pid);
@@ -235,9 +248,16 @@ bool VMPDebugger::Run(const std::string &exePath)
     }
 
     // 2. Select the main application payload code section (executable section distinct from the stub)
+    struct GhostRegion
+    {
+        DWORD rva;
+        DWORD size;
+        std::string name;
+    };
+    std::vector<GhostRegion> ghostRegions;
+
     for (int i = 0; i < numberOfSections; ++i)
     {
-        // Skip the protector stub section
         if (&secs[i] == stubSection)
             continue;
 
@@ -249,13 +269,25 @@ bool VMPDebugger::Run(const std::string &exePath)
                                 (secs[i].Characteristics & IMAGE_SCN_MEM_EXECUTE) ||
                                 (sName == "CODE" || sName == ".text");
 
-        if (isExecutableCode)
+        bool isGhost = (secs[i].SizeOfRawData == 0 && secs[i].Misc.VirtualSize > 0);
+
+        if (isExecutableCode && isGhost)
         {
-            codeRVA = secs[i].VirtualAddress;
-            codeSize = secs[i].Misc.VirtualSize ? secs[i].Misc.VirtualSize : secs[i].SizeOfRawData;
-            codeSectionName = sName;
-            break;
+            DWORD rva = secs[i].VirtualAddress;
+            DWORD size = secs[i].Misc.VirtualSize ? secs[i].Misc.VirtualSize : secs[i].SizeOfRawData;
+            ghostRegions.push_back({rva, size, sName});
+            Logger::Log("[*] Tracking ghost/executable region for population: " + sName +
+                            " (RVA: " + ToHex((uintptr_t)rva) + ", Size: " + ToHex((uintptr_t)size) + ")",
+                        LogLevel::INFO);
         }
+    }
+
+    // Keep codeRVA/codeSize pointing at the first region for OEP scanning, etc. (unchanged elsewhere)
+    if (!ghostRegions.empty())
+    {
+        codeRVA = ghostRegions[0].rva;
+        codeSize = ghostRegions[0].size;
+        codeSectionName = ghostRegions[0].name;
     }
 
     Logger::Log("[+] ImageBase: " + ToHex((uintptr_t)imageBase));
@@ -279,7 +311,7 @@ bool VMPDebugger::Run(const std::string &exePath)
         DWORD stabilityWindowSize = codeSize ? codeSize : 0x00100000;
         size_t stabilitySampleSize = std::min<DWORD>(stabilityWindowSize, 0x00100000);
 
-        if (TextSectionStable(pi.hProcess, imageBase, codeRVA, stabilityWindowSize, stabilitySampleSize, 250))
+        if (AllGhostRegionsStable(pi.hProcess, imageBase, ghostRegions))
         {
             Logger::Log("[+] Code section populated and stable after ~" + std::to_string(poll * 10) + "ms");
 
